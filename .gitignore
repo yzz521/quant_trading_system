@@ -9,6 +9,11 @@ env/
 # ---- macOS ----
 .DS_Store
 
+# ---- IDE ----
+.idea/
+.vscode/
+*.iml
+
 # ---- 运行产物 / 数据缓存 / 日志 ----
 results/
 

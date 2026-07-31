@@ -83,10 +83,14 @@ def fetch_kline(info: MarketInfo, days: int = 250) -> pd.DataFrame:
     if info.market == "CN":
         _clear_proxy()
         import akshare as ak
-        df = ak.stock_zh_a_daily(
-            symbol=info.symbol, start_date=start.strftime("%Y%m%d"),
-            end_date=end.strftime("%Y%m%d"), adjust="qfq",
-        )
+        if info.code.startswith(("5", "1")):
+            # ETF / LOF 场内基金：sina 专用日线接口（stock_zh_a_daily 对基金返回异常）
+            df = ak.fund_etf_hist_sina(symbol=info.symbol)
+        else:
+            df = ak.stock_zh_a_daily(
+                symbol=info.symbol, start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"), adjust="qfq",
+            )
         df = df.rename(columns={"date": "datetime"})
         df["datetime"] = pd.to_datetime(df["datetime"])
         df = df.set_index("datetime").sort_index()

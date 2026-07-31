@@ -24,6 +24,7 @@ import streamlit as st
 
 from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
 from quant_trading_system.stock_analysis.holdings import Holdings
+from quant_trading_system.stock_analysis.sell_zone import analyze_positions
 from quant_trading_system.stock_analysis.trade_monitor import TradeMonitor
 
 MARKETS = ["CN", "US", "HK"]
@@ -41,6 +42,10 @@ def _label(p: dict) -> str:
     return f"{p['code']} {p.get('name', '')}".strip()
 
 
+def _pfmt(v) -> str:
+    return f"{v:.4f}" if isinstance(v, (int, float)) else "-"
+
+
 # --------------------------------------------------------------------------- #
 st.set_page_config(page_title="持仓管理 · 量化交易系统", layout="wide")
 st.title("💼 持仓管理")
@@ -48,8 +53,9 @@ st.title("💼 持仓管理")
 _holder = get_holdings()
 st.caption(f"数据存储：`{_holder.db_path}`（本地 SQLite，不入库；调度器推送时读取同一数据库）")
 
-tab_overview, tab_paste, tab_add, tab_edit, tab_delete = st.tabs(
-    ["📊 持仓总览", "📋 粘贴成交", "➕ 新增持仓", "✏️ 编辑持仓", "🗑️ 删除持仓"]
+tab_overview, tab_paste, tab_add, tab_edit, tab_delete, tab_sellzone = st.tabs(
+    ["📊 持仓总览", "📋 粘贴成交", "➕ 新增持仓", "✏️ 编辑持仓", "🗑️ 删除持仓",
+     "🎯 卖出区间"]
 )
 
 # =========================== 持仓总览 =========================== #
@@ -221,6 +227,68 @@ with tab_edit:
                                 e_cost, int(e_qty), e_date.strip())
                 st.success("已更新")
                 st.rerun()
+
+# =========================== 卖出区间分析 =========================== #
+with tab_sellzone:
+    st.subheader("🎯 卖出区间分析")
+    st.caption("对每只持仓：基于最近约一年日 K 线，综合成本价止盈位（+10%/+20%/+30%）与"
+               "均线 / 布林带 / 前高压力位，给出建议卖出区间与止损参考；若持仓有变动请重新分析。")
+    if st.button("🔍 开始分析", type="primary", use_container_width=True):
+        with st.spinner("获取行情并计算中（每只约 1~3 秒）..."):
+            st.session_state["sellzone_result"] = analyze_positions(_holder.all())
+
+    results = st.session_state.get("sellzone_result")
+    if results is None:
+        st.info("点击上方按钮，对当前全部持仓进行卖出区间分析。")
+    else:
+        ok = [r for r in results if "error" not in r]
+        bad = [r for r in results if "error" in r]
+
+        if ok:
+            rows = []
+            for r in ok:
+                rows.append({
+                    "代码": r["code"], "名称": r["name"],
+                    "现价": r["current_price"], "成本": r["cost_price"],
+                    "盈亏%": f"{r['pnl_pct']:+.1f}",
+                    "建议卖出区间": f"{r['zone_lo']} ~ {r['zone_hi']}",
+                    "区间依据": f"{r['zone_lo_label']} → {r['zone_hi_label']}",
+                    "止损参考": _pfmt(r["stop_loss"]),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.caption(f"共分析 {len(ok)} 只持仓")
+
+            for r in ok:
+                with st.expander(f"📌 {r['code']} {r['name']} — {r['advice']}"):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("现价", f"{r['current_price']:.4f}")
+                    c2.metric("成本", f"{r['cost_price']:.4f}")
+                    c3.metric("盈亏", f"{r['pnl_pct']:+.2f}%")
+                    c4.metric("止损参考", _pfmt(r["stop_loss"]))
+                    st.markdown("**当前价上方目标位：**")
+                    if r["targets"]:
+                        tdf = pd.DataFrame([{
+                            "目标价": t["price"],
+                            "依据": " / ".join(t["labels"]),
+                            "距现价": f"{t['pct']:+.1f}%",
+                        } for t in r["targets"]])
+                        st.dataframe(tdf, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("当前价已高于所有参考压力位（创出新高），目标按波动率(ATR)推算。")
+                    st.markdown(
+                        f"**均线：** MA5={_pfmt(r['ma5'])} MA10={_pfmt(r['ma10'])} "
+                        f"MA20={_pfmt(r['ma20'])} MA60={_pfmt(r['ma60'])}  \n"
+                        f"**布林带：** {_pfmt(r['boll_lower'])} / {_pfmt(r['boll_mid'])} / "
+                        f"{_pfmt(r['boll_upper'])}（下/中/上）  \n"
+                        f"**近期高点：** 20日={_pfmt(r['high20'])} 60日={_pfmt(r['high60'])} "
+                        f"120日={_pfmt(r['high120'])}  \n"
+                        f"**ATR(14)：** {_pfmt(r['atr'])}（每日平均波动幅度）"
+                    )
+
+        if bad:
+            st.warning(f"以下 {len(bad)} 只持仓分析失败（不影响其它持仓）：")
+            for r in bad:
+                st.write(f"• {r.get('code', '-')} {r.get('name', '')} — {r['error']}")
 
 # =========================== 删除持仓 =========================== #
 with tab_delete:
