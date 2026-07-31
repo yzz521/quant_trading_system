@@ -20,8 +20,8 @@ cn_holdings = [
 ]
 cn_summary = {"total_cost": 192000.0, "total_value": 186610.0, "total_pnl": -5390.0, "total_pnl_pct": -2.81, "count": 2}
 cn_diags = [
-    {"code": "600000", "name": "浦发银行", "score": 60, "rating": "买入", "trend": "上升趋势", "price": 9.28, "change_pct": 0.98, "signals": [{"name": "突破20日新高"}, {"name": "RSI超买(81)"}], "risks": ["RSI超买", "高位钝化风险"]},
-    {"code": "600519", "name": "贵州茅台", "score": 52, "rating": "观望", "trend": "震荡偏多", "price": 1680.50, "change_pct": -0.32, "signals": [], "risks": ["暂未触发明显风险信号"]},
+    {"code": "600000", "name": "浦发银行", "score": 60, "rating": "买入", "trend": "上升趋势", "price": 9.28, "change_pct": 0.98, "signals": [{"name": "突破20日新高"}, {"name": "RSI超买(81)"}], "risks": ["RSI超买(81)", "高位钝化风险"]},
+    {"code": "600519", "name": "贵州茅台", "score": 52, "rating": "观望", "trend": "震荡偏多", "price": 1680.50, "change_pct": -0.32, "signals": [], "risks": ["RSI超买(83)", "触及布林上轨"]},
     {"code": "000001", "name": "平安银行", "score": 58, "rating": "买入", "trend": "上升趋势", "price": 11.28, "change_pct": 0.71, "signals": [{"name": "MACD金叉"}], "risks": ["暂未触发明显风险信号"]},
     {"code": "601318", "name": "中国平安", "score": 55, "rating": "观望", "trend": "震荡偏多", "price": 48.62, "change_pct": 0.15, "signals": [{"name": "多头排列"}], "risks": ["暂未触发明显风险信号"]},
 ]

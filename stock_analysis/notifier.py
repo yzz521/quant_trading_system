@@ -182,15 +182,16 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
     # --- risk block ---
     risks = []
     for d in diagnoses:
+        stock = f"{d['name']}({d['code']})"
         for r in d.get("risks", []):
             if "暂未触发" not in r:
-                risks.append(r)
+                risks.append({"stock": stock, "risk": r})
     if risks:
         text_parts.append("")
         text_parts.append("== 风险提示 ==")
         html_parts.append(_html_section("⚠️ 风险提示", _risks_html(risks)))
-        for r in list(dict.fromkeys(risks))[:10]:
-            text_parts.append(f"⚠️ {r}")
+        for rk in risks[:12]:
+            text_parts.append(f"⚠️ {rk['stock']}: {rk['risk']}")
 
     text_body = "\n".join(text_parts)
     html_body = _html_wrap(title, mname, html_parts)
@@ -312,6 +313,8 @@ def _scan_html(hits: list) -> str:
 
 
 def _risks_html(risks: list) -> str:
-    unique = list(dict.fromkeys(risks))[:10]
-    items = "".join(f"<li style='color:{DOWN};margin:4px 0'>⚠️ {r}</li>" for r in unique)
+    items = "".join(
+        f"<li style='color:{DOWN};margin:4px 0'>⚠️ <b>{r['stock']}</b>: {r['risk']}</li>"
+        for r in risks[:12]
+    )
     return f"<ul style='padding-left:20px;margin:6px 0'>{items}</ul>"
