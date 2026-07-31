@@ -1,0 +1,22 @@
+# Quantitative Trading System — Python dependencies
+# Core (required)
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+pyarrow>=12.0          # parquet cache backend
+pyyaml>=6.0
+
+# Data sources (install what you need)
+akshare>=1.10          # A股 / 港股 / 期货
+yfinance>=0.2.30       # 美股 / 黄金 / ETF
+
+# Machine learning (optional — only for MLStrategy / ml module)
+scikit-learn>=1.3
+
+# Dashboard (optional)
+streamlit>=1.28
+
+# Live brokers (install only when going live)
+# python-binance       # 加密货币实盘
+# vnpy_ctp             # 期货 CTP 实盘
+# ib_insync            # 美股 IBKR 实盘

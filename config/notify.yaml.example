@@ -1,0 +1,46 @@
+# 股票自动分析推送配置（模板）
+# 使用方式：复制为 config/notify.yaml 并填入你的凭证
+#   cp config/notify.yaml.example config/notify.yaml
+
+# 自选股池（定时诊断这些股票）
+stock_pools:
+  CN: ["600519", "000001"]
+  US: ["AAPL", "TSLA"]
+  HK: ["00700", "09988"]
+
+# 全市场扫描（与自选股诊断同时推送）
+scan:
+  enabled: true
+  conditions: ["多头排列", "MACD金叉", "突破新高", "放量", "超卖"]
+  cn_pool: []
+  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300
+  us_pool: ["AAPL", "MSFT", "TSLA"]
+  hk_pool: ["00700", "09988"]
+
+# 推送渠道（启用哪个填哪个的凭证）
+notify:
+  email:
+    enabled: false
+    smtp_host: "smtp.qq.com"
+    smtp_port: 465           # SSL 端口；TLS 用 587
+    use_ssl: true
+    username: "YOUR_EMAIL@example.com"
+    password: "YOUR_SMTP_AUTH_CODE"   # 授权码（非登录密码）
+    sender_name: "股票分析助手"
+    to: ["YOUR_EMAIL@example.com"]
+
+  serverchan:                # Server酱 · 微信推送 https://sct.ftqq.com
+    enabled: false
+    sendkey: "YOUR_SERVERCHAN_SENDKEY"
+
+  feishu:                    # 飞书自定义机器人
+    enabled: false
+    webhook: ""              # 群机器人 webhook 完整 URL
+    secret: ""               # 签名校验密钥（启用加签才有，可留空）
+
+# 调度频率（仅在对应市场交易时段内执行）
+schedule:
+  cn_interval_min: 60        # A股：每 60 分钟
+  ushk_interval_min: 10      # 美股/港股：每 10 分钟
+  us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
+  poll_interval_sec: 60      # 调度器主循环检查间隔

@@ -1,0 +1,32 @@
+# Global settings for the quantitative trading system.
+# These are defaults; most values can be overridden per backtest via
+# BacktestConfig / LiveConfig dataclasses.
+
+backtest:
+  initial_capital: 1000000
+  currency: CNY
+  commission_rate: 0.0003      # 3 bps per side
+  stamp_duty: 0.001            # CN equity sell-side
+  slippage_bps: 2.0
+  fill_policy: next_open       # avoid look-ahead bias
+  allow_short: false
+  lot_size: 100                # A-shares; set 1 for US/crypto
+  min_commission: 5.0
+  position_weight: 0.10
+  max_positions: 10
+  max_position_pct: 0.25
+  max_exposure: 1.0
+  max_drawdown: 0.20           # halt new entries beyond this DD
+  min_cash_ratio: 0.05
+
+data:
+  cache_dir: results/data_cache
+  default_source: akshare      # akshare | yfinance | synthetic
+
+risk:
+  enabled: true
+  circuit_breaker_loss: 0.05   # intraday 5% loss halts trading
+
+logging:
+  level: INFO
+  file: results/run.log
