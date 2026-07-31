@@ -8,6 +8,9 @@ stock_pools:
   US: ["AAPL", "TSLA"]
   HK: ["00700", "09988"]
 
+# 启用的市场：只推送这些市场的分析（CN=A股 HK=港股 US=美股），可组合
+enabled_markets: ["CN", "HK", "US"]
+
 # 全市场扫描（与自选股诊断同时推送）
 scan:
   enabled: true
@@ -16,6 +19,22 @@ scan:
   cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300
   us_pool: ["AAPL", "MSFT", "TSLA"]
   hk_pool: ["00700", "09988"]
+
+# 交易监听：从 macOS 通知中心识别券商成交消息，自动同步持仓
+# 使用前提：1) 系统设置→隐私与安全性→完全磁盘访问 给终端/IDE授权
+#           2) 微信 Mac 保持登录在线；3) 同花顺/平安证券服务号开启交易提醒
+# 入口：python examples/run_trade_monitor.py --once（或常驻）
+trade_monitor:
+  enabled: false            # 授权后改为 true（或直接用命令行启动）
+  notify_db: ""                # 留空自动定位 ~/Library/Group Containers/group.com.apple.usernoted/db2/db
+  whitelist_apps: ["com.tencent.xinWeChat"]   # 只处理微信的通知（前缀匹配）
+  app_name_hint: ["同花顺", "平安证券", "成交", "委托"]  # 正文含这些词才解析，留空=全部
+  auto_sync: true           # 解析成功是否自动写入持仓库
+  poll_interval_sec: 30     # 常驻监听轮询间隔
+  lookback_min: 2880        # 首次运行回溯最近多少分钟的通知（48h）
+  keywords:
+    buy: ["买入", "买进", "申购", "增持", "建仓"]
+    sell: ["卖出", "卖出了", "赎回", "减持", "清仓"]
 
 # 推送渠道（启用哪个填哪个的凭证）
 notify:

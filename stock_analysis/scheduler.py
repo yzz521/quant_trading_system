@@ -44,6 +44,10 @@ class MarketScheduler:
         self.ushk_interval = int(sched.get("ushk_interval_min", 10)) * 60
         self.us_winter = bool(sched.get("us_winter", True))
         self.poll_interval = int(sched.get("poll_interval_sec", 60))
+        # 启用的市场：只推送这些市场的分析，默认全部（CN/HK/US）
+        raw_markets = self.cfg.get("enabled_markets") or ["CN", "HK", "US"]
+        self.enabled_markets = [m.upper() for m in raw_markets
+                                if str(m).upper() in ("CN", "HK", "US")]
         self.notifier = Notifier(config_path)
         holdings_path = str(Path(config_path).parent / "holdings.yaml")
         self.holdings = Holdings(holdings_path)
@@ -156,6 +160,9 @@ class MarketScheduler:
             return
         status = self.session_status()
         for m, open_ in status.items():
+            if m not in self.enabled_markets:
+                log.info("[%s] 未启用，跳过", m)
+                continue
             if open_:
                 self._run_market(m)
             else:
@@ -172,13 +179,16 @@ class MarketScheduler:
                 now = self._now_beijing()
                 intervals = {"CN": self.cn_interval, "HK": self.ushk_interval, "US": self.ushk_interval}
                 for m, interval in intervals.items():
+                    if m not in self.enabled_markets:
+                        continue
                     if self._in_session(m, now) and now_ts - last[m] >= interval:
                         try:
                             self._run_market(m)
                         except Exception as e:  # noqa: BLE001
                             log.error("[%s] 执行失败: %s", m, e)
                         last[m] = now_ts
-                status = {m: ("开" if self._in_session(m, now) else "休") for m in ("CN", "HK", "US")}
+                status = {m: ("开" if self._in_session(m, now) else "休")
+                          for m in self.enabled_markets}
                 log.info("状态 %s", status)
                 time.sleep(self.poll_interval)
         except KeyboardInterrupt:
