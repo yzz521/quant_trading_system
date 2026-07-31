@@ -4,4 +4,10 @@
 # 使用方式：复制为 config/holdings.yaml 后填写你的持仓
 #   cp config/holdings.yaml.example config/holdings.yaml
 
-holdings: []
+holdings:
+  - code: ""
+    name: ""
+    market: ""
+    cost_price: 
+    quantity: 
+    buy_date: ""
