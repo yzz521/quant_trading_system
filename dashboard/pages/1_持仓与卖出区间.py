@@ -51,13 +51,19 @@ def _pfmt(v) -> str:
 _holder = get_holdings()
 st.caption(f"数据存储：`{_holder.db_path}`（本地 SQLite，不入库；调度器推送时读取同一数据库）")
 
-tab_overview, tab_paste, tab_add, tab_edit, tab_delete, tab_sellzone = st.tabs(
-    ["📊 持仓总览", "📋 粘贴成交", "➕ 新增持仓", "✏️ 编辑持仓", "🗑️ 删除持仓",
-     "🎯 卖出区间"]
+tab_overview, tab_sell, tab_paste, tab_add, tab_edit, tab_delete, tab_sellzone = st.tabs(
+    ["📊 持仓总览", "💸 记录卖出", "📋 粘贴成交", "➕ 新增持仓", "✏️ 编辑持仓",
+     "🗑️ 删除持仓", "🎯 卖出区间"]
 )
 
 # =========================== 持仓总览 =========================== #
 with tab_overview:
+    st.info(
+        "持仓以本系统 **config/holdings.db** 为准。"
+        "券商里卖出后，请用「💸 记录卖出」或「📋 粘贴成交」同步；"
+        "macOS 可选用成交监听。系统**不会**自动读取券商账户。"
+    )
+
     positions = _holder.all()
     if not positions:
         st.info("暂无持仓，请到「新增持仓」标签页添加。")
@@ -225,6 +231,43 @@ with tab_edit:
                                 e_cost, int(e_qty), e_date.strip())
                 st.success("已更新")
                 st.rerun()
+
+
+# =========================== 记录卖出 =========================== #
+with tab_sell:
+    st.subheader("💸 记录卖出（同步本地持仓）")
+    st.caption(
+        "在券商 App 完成卖出后，在这里登记数量，系统才会更新持仓。"
+        "全部卖出则自动从列表移除；部分卖出只减数量、成本价不变。"
+    )
+    positions = _holder.all()
+    if not positions:
+        st.warning("当前无持仓可卖")
+    else:
+        labels = [f"{p['code']} {p.get('name','')}（持有 {int(float(p['quantity']))} 股）"
+                  for p in positions]
+        sel = st.selectbox("选择标的", range(len(positions)),
+                           format_func=lambda i: labels[i], key="sell_sel")
+        p = positions[sel]
+        held = int(float(p["quantity"]))
+        c1, c2 = st.columns(2)
+        sell_qty = c1.number_input(
+            "卖出数量（股）", min_value=1, max_value=held,
+            value=min(100, held) if held >= 100 else held, step=100,
+            key="sell_qty",
+        )
+        c2.metric("卖后剩余", f"{held - int(sell_qty)} 股")
+        clear = st.checkbox("全部卖出（清仓）", value=False, key="sell_clear")
+        if clear:
+            sell_qty = held
+            st.warning(f"将清仓 {p['code']} 全部 {held} 股")
+        if st.button("确认登记卖出", type="primary", use_container_width=True):
+            try:
+                msg = _holder.apply_sell(p["code"], int(sell_qty))
+                st.success(msg)
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
 # =========================== 卖出区间分析 =========================== #
 with tab_sellzone:

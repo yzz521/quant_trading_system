@@ -149,6 +149,30 @@ class Holdings:
             conn.execute(f"DELETE FROM holdings WHERE code IN ({marks})", codes)
         self.reload()
 
+    def apply_sell(self, code: str, quantity: int) -> str:
+        """Reduce position by ``quantity`` shares. Delete row if remaining <= 0.
+
+        Returns a short human message. Does not know about broker fills —
+        caller must pass the sold quantity explicitly (manual form or parsed trade).
+        """
+        code = str(code).strip().upper()
+        qty = int(quantity)
+        if qty <= 0:
+            raise ValueError("卖出数量必须大于 0")
+        rows = {p["code"].upper(): p for p in self.all()}
+        if code not in rows:
+            raise ValueError(f"持仓中无 {code}")
+        cur = int(float(rows[code]["quantity"]))
+        if qty > cur:
+            raise ValueError(f"卖出数量 {qty} 大于持仓 {cur}")
+        left = cur - qty
+        if left <= 0:
+            self.delete([code])
+            return f"已清仓 {code}（卖出 {qty} 股）"
+        self.update(code, quantity=left)
+        return f"{code} 卖出 {qty} 股，剩余 {left} 股"
+
+
     def replace_all(self, positions: list[dict]) -> None:
         """Replace the whole table (used for migration / bulk edits)."""
         with self._conn() as conn:

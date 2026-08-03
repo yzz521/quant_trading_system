@@ -1,6 +1,6 @@
 # quant_trading_system
 
-事件驱动的多市场量化交易框架，并附带 **A 股个人持仓助手**（卖出区间、诊断、推送）。
+事件驱动的多市场量化交易框架，并附带 **A 股个人持仓助手**（卖出区间、诊断、定时推送）。
 
 - **License**: MIT  
 - **Python**: ≥ 3.10  
@@ -15,7 +15,7 @@
 | **A. 量化框架** | 数据 → 策略 → 风控 → 回测 / Paper | `examples/backtest_demo.py`、`BacktestEngine` |
 | **B. A 股助手** | 持仓 SQLite、卖出区间、诊断扫描、邮件推送 | `python deploy/ctl.py start-all` → http://localhost:8502 |
 
-助手用于研究与决策辅助，**不会自动下真实订单**。CTP / IBKR / Binance 等实盘适配器默认仍是骨架（`NotImplementedError`），需自行接 SDK。
+助手用于研究与决策辅助，**不会自动下真实订单**。CTP / IBKR / Binance 等实盘适配器默认仍是骨架（`NotImplementedError`），需自行接 SDK，见 [`docs/LIVE_BROKERS.md`](docs/LIVE_BROKERS.md)。
 
 ---
 
@@ -40,48 +40,52 @@ pip install -e ".[dev,data,dashboard]"
 
 包目录名需为 `quant_trading_system`，以便 `import quant_trading_system`。
 
-### 2. 一键启动全部 Web 服务（推荐）
+### 2. 一键启动（推荐）
 
 跨平台统一入口是 **`deploy/ctl.py`**（不依赖 bash）：
 
 ```bash
-# macOS / Linux / Windows（在项目根目录）
+# 任意系统（在项目根目录）
 python deploy/ctl.py start-all
 ```
 
 | 系统 | 命令 |
 |------|------|
 | **任意平台** | `python deploy/ctl.py start-all` |
-| macOS / Linux | `./deploy/ctl.sh start-all`（内部转调 ctl.py） |
+| Windows CMD | `deploy\ctl.bat start-all` |
 | Windows PowerShell | `.\deploy\ctl.ps1 start-all` |
+| macOS / Linux | `./deploy/ctl.sh start-all`（内部转调 ctl.py） |
 
-启动后浏览器打开 **一个地址**：
+浏览器只打开 **一个地址**：
 
 | 地址 | 说明 |
 |------|------|
-| **http://localhost:8502** | 左侧切换：持仓与卖出区间 / 个股诊断与扫描 / 研究工具（回测与风险） |
+| **http://localhost:8502** | 左侧菜单：持仓与卖出区间 / 个股诊断与扫描 / 研究工具（回测与风险） |
 
 ```bash
-python deploy/ctl.py status          # 查看状态
-python deploy/ctl.py stop-all        # 全部停止
-python deploy/ctl.py restart-all     # 全部重启
-python deploy/ctl.py start-all --with-scheduler   # 同时启动推送调度器（需配置 notify）
+python deploy/ctl.py status
+python deploy/ctl.py stop-all
+python deploy/ctl.py restart-all
+
+# 看板 + 定时推送（需先配置 config/notify.yaml）
+python deploy/ctl.py start-all --with-scheduler
 ```
 
 单独控制：
 
 ```bash
-python deploy/ctl.py dashboard start|stop|status
-python deploy/ctl.py scheduler start|stop|status   # 推送调度器（可选）
+python deploy/ctl.py dashboard start|stop|status|log
+python deploy/ctl.py scheduler start|stop|status|log
 ```
 
-端口用环境变量 `PORT` 覆盖（默认 **8502**，仅此一端口）。
+端口用环境变量 `PORT` 覆盖（默认 **8502**）。
 
 ### 3. 运行测试与示例
 
 ```bash
-export PYTHONPATH="$(dirname "$PWD"):$PYTHONPATH"   # Linux/macOS，若未 editable 安装
-# Windows: set PYTHONPATH=%CD%\..
+# 若未 editable 安装，需能 import 到包
+export PYTHONPATH="$(dirname "$PWD"):$PYTHONPATH"   # Linux/macOS
+# Windows CMD: set PYTHONPATH=%CD%\..
 
 pytest -q
 
@@ -119,16 +123,15 @@ quant_trading_system/
 ├── risk/              # 仓位 / 回撤 / T+1 / 投影权重 / 下单频率
 ├── portfolio/         # 现金、持仓、权益曲线
 ├── backtest/          # SimulatedBroker、Optimizer（网格 / Walk-Forward）
-├── execution/         # PaperBroker、LiveEngine、LiveBarPoller
+├── execution/         # PaperBroker、LiveEngine、LiveBarPoller、券商骨架
 ├── analytics/         # 绩效指标、基准对比、HTML 报告
-├── stock_analysis/    # 持仓 DB、卖出区间、诊断、扫描、推送
-├── dashboard/         # Streamlit：unified / holdings / stock
-├── deploy/            # ctl.py（跨平台）、ctl.sh、ctl.ps1
-├── examples/          # 回测 / Paper / 扫描→股票池 等示例
+├── stock_analysis/    # 持仓 DB、卖出区间、诊断、扫描、调度推送
+├── dashboard/         # Streamlit 多页：首页 + 持仓 / 诊断 / 研究工具
+├── deploy/            # ctl.py / ctl.sh / ctl.ps1 / ctl.bat
+├── examples/
 ├── config/            # settings、*.yaml.example（勿提交真实密钥）
 ├── tests/
-├── docs/
-└── pyproject.toml
+└── docs/
 ```
 
 ---
@@ -179,7 +182,7 @@ from quant_trading_system.stock_analysis.universe import make_universe
 
 ### 卖出区间（含深套分批路径）
 
-在 **持仓页**（8503）打开「卖出区间」标签，或：
+浏览器 **http://localhost:8502** → 左侧 **「持仓与卖出区间」**；或：
 
 ```python
 from quant_trading_system.stock_analysis.sell_zone import analyze_sell_zone
@@ -195,22 +198,59 @@ python examples/paper_poll_demo.py --seconds 5
 
 ---
 
+## 定时推送（调度器）
+
+看板与调度器共用 **`config/holdings.db`**（由 `Holdings` 从 `config/holdings.yaml` 路径解析，与路径 A 一致）。
+
+1. 复制并编辑推送配置（**不要**提交真实密钥）：
+
+```bash
+cp config/notify.yaml.example config/notify.yaml
+# 打开 notify.email.enabled，填写 SMTP 授权码与收件人
+```
+
+2. 测试一发（可指定市场，不依赖是否开盘）：
+
+```bash
+python examples/run_scheduler.py --test --market CN
+```
+
+3. 常驻：
+
+```bash
+python deploy/ctl.py scheduler start
+# 或
+python deploy/ctl.py start-all --with-scheduler
+```
+
+推送内容包括：持仓盈亏、自选诊断、可选扫描命中；若已合入持仓动作模块，还会包含 **卖出区间 / 止损 / 深套分批 / 加仓参考**（研究辅助，非投资建议）。
+
+日志：`results/scheduler.log`。说明见 [`docs/SCHEDULER_HOLDINGS.md`](docs/SCHEDULER_HOLDINGS.md)。
+
+---
+
 ## 配置与安全
 
 | 文件 | 说明 |
 |------|------|
 | `config/settings.yaml` | 回测/费用等默认参数 |
-| `config/holdings.yaml.example` | 旧版 YAML 示例；现持仓在 `config/holdings.db` |
+| `config/holdings.yaml.example` | 旧版 YAML 示例；现持仓在 **`config/holdings.db`** |
 | `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证 |
 
-**不要**把 `notify.yaml`、真实 `holdings.db`、SMTP/Server酱密钥提交到 Git。
+**不要**把 `notify.yaml`、真实 `holdings.db`、SMTP / Server酱 / 飞书密钥提交到 Git。
 
-调度器：
+---
 
-```bash
-python examples/run_scheduler.py --test --market CN
-python deploy/ctl.py start-all --with-scheduler
-```
+## 实盘适配器
+
+| 文件 | 说明 |
+|------|------|
+| `execution/paper_broker.py` | 模拟成交，开箱可用 |
+| `execution/binance_broker.py` | 币安骨架 → 接 `python-binance`（建议先 Testnet） |
+| `execution/ibkr_broker.py` | 盈透骨架 → 接 `ib_insync` + TWS/Gateway Paper |
+| `execution/ctp_broker.py` | CTP 期货骨架 → 接 `vnpy_ctp` / 柜台 API + SimNow |
+
+SDK **不随本仓库分发**，需自行安装并在 `# TODO` 处接线。步骤见 [`docs/LIVE_BROKERS.md`](docs/LIVE_BROKERS.md)。
 
 ---
 
@@ -231,6 +271,7 @@ ruff check .    # 若已安装 ruff
 | 能力 | Windows | macOS | Linux |
 |------|---------|-------|-------|
 | `python deploy/ctl.py` | ✅ | ✅ | ✅ |
+| `deploy/ctl.bat` | ✅ | — | — |
 | `deploy/ctl.ps1` | ✅ | — | — |
 | `deploy/ctl.sh` | 需 WSL/Git Bash | ✅ | ✅ |
 | Streamlit 看板 | ✅ | ✅ | ✅ |
@@ -242,7 +283,7 @@ ruff check .    # 若已安装 ruff
 
 ## 路线与状态（摘要）
 
-已落地：工程基建（MIT / pyproject / tests）、A 股 T+1 / 涨跌停 / 量能、组合权重与下单频率、网格与 Walk-Forward、基准对比、Paper 线程安全与定时拉行情、多源降级、卖出区间深套路径、统一 ctl 启停。
+已落地：工程基建（MIT / pyproject / tests）、A 股 T+1 / 涨跌停 / 量能、组合权重与下单频率、网格与 Walk-Forward、基准对比、Paper 线程安全与定时拉行情、多源降级、卖出区间深套路径、统一看板（单端口）、跨平台 ctl、定时分析推送（持仓与看板同库）。
 
 实盘券商通道仍为骨架；接入前请先用 Paper 全链路验证。
 

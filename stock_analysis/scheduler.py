@@ -24,6 +24,9 @@ from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
 from .holdings import Holdings
+from .scheduler_state import record_run
+from .corporate_actions import fetch_upcoming_dividends
+from .holdings_action import analyze_holding_actions
 
 try:
     from zoneinfo import ZoneInfo
@@ -117,20 +120,56 @@ class MarketScheduler:
             except Exception as e:  # noqa: BLE001
                 log.error("[%s] 扫描失败: %s", market, e)
 
-        # 该市场持仓盈亏
+        # 该市场持仓盈亏 + 卖出/加仓动作建议
         holdings, h_summary = [], None
         try:
             holdings, h_summary = self.holdings.compute_pnl(market)
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] 持仓盈亏计算失败: %s", market, e)
 
+        holding_actions = None
+        if holdings:
+            try:
+                # compute_pnl 行已含 code/cost/quantity/current_price
+                holding_actions = analyze_holding_actions(holdings)
+                log.info("[%s] 持仓动作分析 %d 只", market, len(holding_actions))
+            except Exception as e:  # noqa: BLE001
+                log.warning("[%s] 持仓动作分析失败: %s", market, e)
+
+        # 公司行为（分红/除权），失败不阻断
+        corp_actions = []
+        try:
+            codes = [h.get("code") for h in (holdings or []) if h.get("code")]
+            if not codes:
+                codes = list(self.stock_pools.get(market, []) or [])
+            corp_actions = fetch_upcoming_dividends(codes, within_days=14)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] 公司行为拉取失败: %s", market, e)
+
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
             holdings=holdings or None, holdings_summary=h_summary,
+            holding_actions=holding_actions,
+            corporate_actions=corp_actions or None,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
-        self.notifier.send(title, text, html)
+        try:
+            results = self.notifier.send(title, text, html)
+            channels = list(getattr(self.notifier, "channels", []) or [])
+            notify_ok = True
+            if channels and isinstance(results, dict):
+                notify_ok = any(v == "ok" for k, v in results.items() if k != "_print")
+            detail = f"diagnoses={len(diagnoses)} scan={len(scan_hits or [])}"
+            record_run(
+                market, ok=True, detail=detail,
+                holdings_n=len(holdings or []),
+                actions_n=len(holding_actions or []) if holding_actions else 0,
+                channels=channels, notify_ok=notify_ok if channels else None,
+            )
+        except Exception as e:  # noqa: BLE001
+            record_run(market, ok=False, detail=str(e), holdings_n=len(holdings or []))
+            raise
 
     # ------------------------------------------------------------------ #
     def _scan_universe(self, market: str, scanner: StockScanner) -> list[str]:

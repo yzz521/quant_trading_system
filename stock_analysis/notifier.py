@@ -125,7 +125,9 @@ class Notifier:
 def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list] = None,
                          scan_enabled: bool = True,
                          holdings: Optional[list] = None,
-                         holdings_summary: Optional[dict] = None
+                         holdings_summary: Optional[dict] = None,
+                         holding_actions: Optional[list] = None,
+                         corporate_actions: Optional[list] = None,
                          ) -> tuple[str, str, str]:
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
@@ -153,6 +155,19 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
                 f"持{s['count']}只"
             )
             text_parts.append("")
+
+    # --- holding action (sell / add) ---
+    if holding_actions:
+        from .holdings_action import actions_to_text, actions_to_html
+        text_parts.append(actions_to_text(holding_actions))
+        text_parts.append("")
+        html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
+
+    if corporate_actions:
+        from .corporate_actions import corporate_actions_text, corporate_actions_html
+        text_parts.append(corporate_actions_text(corporate_actions))
+        text_parts.append("")
+        html_parts.append(_html_section("📅 近期公司行为", corporate_actions_html(corporate_actions)))
 
     # --- diagnosis block ---
     text_parts.append(f"== {mname}自选股诊断 ==")
