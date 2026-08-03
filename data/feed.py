@@ -32,7 +32,8 @@ class BarFeed(DataFeed):
             ...
     """
 
-    def __init__(self, data: dict[str, pd.DataFrame], frequency: str = "1d") -> None:
+    def __init__(self, data: dict[str, pd.DataFrame], frequency: str = "1d",
+                 calendar_market: str | None = None) -> None:
         # Drop empty frames and validate columns
         cleaned: dict[str, pd.DataFrame] = {}
         for sym, df in data.items():
@@ -43,6 +44,7 @@ class BarFeed(DataFeed):
             cleaned[sym] = df.copy()
         self.data = cleaned
         self.frequency = frequency
+        self.calendar_market = calendar_market
         self.timeline = self._build_timeline()
         self.log = get_logger(self.__class__.__name__)
         self.log.info("BarFeed ready: %d symbols, %d timestamps",
@@ -54,7 +56,14 @@ class BarFeed(DataFeed):
         union = None
         for df in self.data.values():
             union = df.index if union is None else union.union(df.index)
-        return sorted(set(union))
+        stamps = sorted(set(union))
+        if self.calendar_market:
+            try:
+                from ..utils.calendar import is_trading_day
+                stamps = [ts for ts in stamps if is_trading_day(ts, market=self.calendar_market)]
+            except Exception:
+                pass
+        return stamps
 
     def __len__(self) -> int:
         return len(self.timeline)

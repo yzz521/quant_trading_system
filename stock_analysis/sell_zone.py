@@ -94,15 +94,54 @@ def analyze_sell_zone(position: dict, days: int = 250,
             # 只保留当前价上方至少 0.5% 的候选（避免前高恰好等于现价）
             if v is not None and v > current * 1.005:
                 seen.setdefault(round(v, 4), []).append(label)
-        targets = [
-            {"price": p, "labels": labels,
-             "pct": round((p - current) / current * 100, 1)}
-            for p, labels in sorted(seen.items())
-        ]
+        targets = []
+        for p, labels in sorted(seen.items()):
+            pct = round((p - current) / current * 100, 1)
+            # near: 到成本前的压力；exit: 回本；far: 成本上方止盈
+            if cost > current and p < cost * 0.998:
+                tier = "near"
+            elif cost > 0 and abs(p - cost) / cost <= 0.005:
+                tier = "exit"
+            elif cost > current and p > cost:
+                tier = "far"
+            else:
+                tier = "near" if pct <= 15 else "far"
+            targets.append({
+                "price": p, "labels": labels, "pct": pct, "tier": tier,
+            })
 
         # ---- 建议卖出区间：现价上方最近的 1~2 个目标位 ----
-        if not targets:
-            # 已突破所有参考压力位（创新高）→ 按波动率(ATR)推算目标
+        # 深度亏损（<= -20%）：优先「反弹减仓 → 回本」，技术位仅作途中参考
+        deep_loss = pnl_pct <= -20.0
+        mild_loss = -20.0 < pnl_pct < 0
+        stage1 = None  # (lo, hi, lo_label, hi_label) 近端分批
+        stage2 = None  # 最终回本
+
+        if deep_loss and cost > current:
+            # 途中反弹位：现价与成本之间的技术压力
+            mid = round((current + cost) / 2.0, 4)
+            path_levels = []
+            for label, v in (("布林中轨", boll_mid), ("MA20", ma20),
+                             ("MA60", ma60), ("20日高点", high20),
+                             ("60日高点", high60)):
+                if v is not None and current * 1.005 < v < cost * 0.995:
+                    path_levels.append((round(v, 4), label))
+            path_levels.sort(key=lambda x: x[0])
+            if path_levels:
+                lo_p, lo_l = path_levels[0]
+                if len(path_levels) >= 2:
+                    hi_p, hi_l = path_levels[1]
+                else:
+                    hi_p, hi_l = lo_p, lo_l
+                stage1 = (lo_p, hi_p, lo_l, hi_l)
+                stage2 = (round(cost, 4), round(cost, 4), "回本价(成本)", "回本价(成本)")
+                # 汇总表仍用「第一目标下沿 → 回本」大区间，便于一眼看到路径
+                zone = (lo_p, round(cost, 4), lo_l, "回本价(成本)")
+            else:
+                stage1 = (mid, mid, "反弹中位", "反弹中位")
+                stage2 = (round(cost, 4), round(cost, 4), "回本价(成本)", "回本价(成本)")
+                zone = (mid, round(cost, 4), "反弹中位", "回本价(成本)")
+        elif not targets:
             bump1 = max((atr or 0.0), current * 0.02)
             bump2 = max(2 * (atr or 0.0), current * 0.05)
             zone = (round(current + bump1, 4), round(current + bump2, 4),
@@ -121,6 +160,11 @@ def analyze_sell_zone(position: dict, days: int = 250,
             cand = [x for x in (ma20, cost * 0.98) if x is not None]
             stop = round(max(cand), 4) if cand else None
             stop_note = "盈利持仓：跌破 MA20 或成本价，保护利润"
+        elif deep_loss:
+            # 深套：止损偏「再亏幅度」，避免被 MA20 过近扫出；默认再跌 8% 或布林下轨
+            cand = [x for x in (boll_lower, current * 0.92) if x is not None]
+            stop = round(min(cand), 4) if cand else round(current * 0.92, 4)
+            stop_note = "深套持仓：再跌约 8% 或跌破布林下轨，控制继续扩大亏损"
         else:
             cand = [x for x in (ma20, current * 0.95) if x is not None]
             stop = round(min(cand), 4) if cand else None
@@ -130,17 +174,41 @@ def analyze_sell_zone(position: dict, days: int = 250,
         parts = []
         if pnl_pct >= 0:
             parts.append(f"当前盈利 {pnl_pct:+.1f}%")
+        elif deep_loss:
+            parts.append(
+                f"当前深套 {pnl_pct:+.1f}%（距回本 {-pnl_pct:.1f}%）；"
+                f"优先反弹减仓，不宜仅按短期压力位清仓"
+            )
+            if stage1 is not None:
+                parts.append(
+                    f"第一目标（分批减仓）{stage1[0]} ~ {stage1[1]}"
+                    f"（{stage1[2]} → {stage1[3]}）"
+                )
+            if stage2 is not None:
+                parts.append(f"最终目标回本 {stage2[0]}（{stage2[2]}）")
         else:
             parts.append(f"当前亏损 {pnl_pct:+.1f}%（距回本 {-pnl_pct:.1f}%）")
-        parts.append(f"建议卖出区间 {zone[0]} ~ {zone[1]}"
-                     f"（{zone[2]} → {zone[3]}）")
+        if not deep_loss:
+            parts.append(f"建议卖出区间 {zone[0]} ~ {zone[1]}"
+                         f"（{zone[2]} → {zone[3]}）")
+        elif stage1 is None:
+            parts.append(f"建议卖出区间 {zone[0]} ~ {zone[1]}"
+                         f"（{zone[2]} → {zone[3]}）")
         if stop is not None:
             parts.append(f"止损参考 {stop}（{stop_note}）")
         advice = "；".join(parts) + "。"
 
+        regime = "profit" if pnl_pct >= 0 else ("deep_loss" if deep_loss else "mild_loss")
         out.update({
             "current_price": round(current, 4),
             "pnl_pct": round(pnl_pct, 2),
+            "regime": regime,
+            "stage1_lo": stage1[0] if stage1 else None,
+            "stage1_hi": stage1[1] if stage1 else None,
+            "stage1_lo_label": stage1[2] if stage1 else None,
+            "stage1_hi_label": stage1[3] if stage1 else None,
+            "stage2_price": stage2[0] if stage2 else None,
+            "stage2_label": stage2[2] if stage2 else None,
             "ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
             "boll_upper": boll_upper, "boll_mid": boll_mid, "boll_lower": boll_lower,
             "high20": high20, "high60": high60, "high120": high120,

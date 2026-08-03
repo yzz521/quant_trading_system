@@ -47,10 +47,29 @@ class DiskCache:
             self.log.warning("Corrupt cache file %s, refetching", path)
             return None
 
-    def set(self, symbol: str, df: pd.DataFrame, frequency: str, adjust: str) -> None:
+    def set(self, symbol: str, df: pd.DataFrame, frequency: str, adjust: str,
+            source: str = "", adjust_flag: str = "") -> None:
         path = self._path(symbol, frequency, adjust)
         try:
             df.to_parquet(path)
         except Exception:  # noqa: BLE001
-            # Fallback to CSV if parquet engine missing.
             df.to_csv(path.with_suffix(".csv"))
+        # sidecar metadata
+        import json
+        from datetime import datetime, timezone
+        meta = {
+            "symbol": symbol,
+            "frequency": frequency,
+            "adjust": adjust_flag or adjust,
+            "source": source,
+            "rows": int(len(df)),
+            "start": str(df.index.min()) if len(df) else None,
+            "end": str(df.index.max()) if len(df) else None,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            path.with_suffix(path.suffix + ".meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            pass

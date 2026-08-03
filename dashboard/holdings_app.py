@@ -247,14 +247,18 @@ with tab_sellzone:
         if ok:
             rows = []
             for r in ok:
-                rows.append({
+                row = {
                     "代码": r["code"], "名称": r["name"],
                     "现价": r["current_price"], "成本": r["cost_price"],
                     "盈亏%": f"{r['pnl_pct']:+.1f}",
                     "建议卖出区间": f"{r['zone_lo']} ~ {r['zone_hi']}",
                     "区间依据": f"{r['zone_lo_label']} → {r['zone_hi_label']}",
                     "止损参考": _pfmt(r["stop_loss"]),
-                })
+                }
+                if r.get("regime") == "deep_loss" and r.get("stage1_lo") is not None:
+                    row["第一目标(分批)"] = f"{r['stage1_lo']} ~ {r['stage1_hi']}"
+                    row["最终回本"] = r.get("stage2_price")
+                rows.append(row)
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             st.caption(f"共分析 {len(ok)} 只持仓")
 
@@ -265,14 +269,53 @@ with tab_sellzone:
                     c2.metric("成本", f"{r['cost_price']:.4f}")
                     c3.metric("盈亏", f"{r['pnl_pct']:+.2f}%")
                     c4.metric("止损参考", _pfmt(r["stop_loss"]))
-                    st.markdown("**当前价上方目标位：**")
+                    if r.get("regime") == "deep_loss" and r.get("stage1_lo") is not None:
+                        st.info(
+                            f"**分批路径：** 第一目标 {r['stage1_lo']} ~ {r['stage1_hi']} "
+                            f"（{r.get('stage1_lo_label','')} → {r.get('stage1_hi_label','')}）；"
+                            f"最终回本 **{r.get('stage2_price')}**"
+                        )
                     if r["targets"]:
-                        tdf = pd.DataFrame([{
-                            "目标价": t["price"],
-                            "依据": " / ".join(t["labels"]),
-                            "距现价": f"{t['pct']:+.1f}%",
-                        } for t in r["targets"]])
-                        st.dataframe(tdf, use_container_width=True, hide_index=True)
+                        def _tdf(items, title):
+                            if not items:
+                                return
+                            st.markdown(title)
+                            st.dataframe(pd.DataFrame([{
+                                "目标价": t["price"],
+                                "依据": " / ".join(t["labels"]),
+                                "距现价": f"{t['pct']:+.1f}%",
+                            } for t in items]), use_container_width=True, hide_index=True)
+
+                        if r.get("regime") == "deep_loss":
+                            near = [t for t in r["targets"] if t.get("tier") in ("near", None) and t["price"] < r["cost_price"]]
+                            exit_ = [t for t in r["targets"] if t.get("tier") == "exit" or abs(t["price"] - r["cost_price"]) / max(r["cost_price"], 1e-9) <= 0.005]
+                            far = [t for t in r["targets"] if t.get("tier") == "far" or t["price"] > r["cost_price"] * 1.005]
+                            # de-dup: exit rows not in near
+                            near = [t for t in near if t not in exit_]
+                            _tdf(near, "**近端目标（反弹减仓，优先关注）：**")
+                            _tdf(exit_, "**回本目标：**")
+                            # Streamlit 禁止 expander 嵌套；用 checkbox 控制远期止盈表
+                            show_far = st.checkbox(
+                                "显示解套后的止盈阶梯（成本+10/20/30%，距现价较远）",
+                                value=False,
+                                key=f"far_targets_{r['code']}",
+                            )
+                            if show_far:
+                                if far:
+                                    st.dataframe(pd.DataFrame([{
+                                        "目标价": t["price"],
+                                        "依据": " / ".join(t["labels"]),
+                                        "距现价": f"{t['pct']:+.1f}%",
+                                    } for t in far]), use_container_width=True, hide_index=True)
+                                else:
+                                    st.caption("无成本上方止盈档。")
+                        else:
+                            st.markdown("**当前价上方目标位：**")
+                            st.dataframe(pd.DataFrame([{
+                                "目标价": t["price"],
+                                "依据": " / ".join(t["labels"]),
+                                "距现价": f"{t['pct']:+.1f}%",
+                            } for t in r["targets"]]), use_container_width=True, hide_index=True)
                     else:
                         st.caption("当前价已高于所有参考压力位（创出新高），目标按波动率(ATR)推算。")
                     st.markdown(
