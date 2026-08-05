@@ -25,6 +25,12 @@ from quant_trading_system.stock_analysis.risk_diagnosis import diagnose_holdings
 from quant_trading_system.strategy import create_strategy, list_strategies
 
 
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.auth import require_login
+apply_theme()
+require_login()
+page_header("研究舱", "合成回测 · 组合风险", "Lab")
+
 tab_bt, tab_risk, tab_help = st.tabs(["📊 快速回测", "🛡️ 持仓风险诊断", "📎 入口说明"])
 
 # ---------- 回测 ----------

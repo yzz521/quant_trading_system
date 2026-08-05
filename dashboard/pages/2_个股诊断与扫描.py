@@ -26,6 +26,12 @@ from quant_trading_system.stock_analysis import (
 from quant_trading_system.stock_analysis.report import plot_kline
 
 
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.auth import require_login
+apply_theme()
+require_login()
+page_header("信号扫描", "评分命中 · 可买性过滤", "Scanner")
+
 tab_diag, tab_scan = st.tabs(["🔍 个股诊断", "📋 选股扫描"])
 
 # --------------------------------------------------------------------------- #

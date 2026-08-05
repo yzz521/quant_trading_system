@@ -1,30 +1,40 @@
-"""应用首页（单一端口入口）。
-
-    streamlit run dashboard/首页.py --server.port 8502
-"""
 from __future__ import annotations
-
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st
 
-st.set_page_config(page_title="量化交易系统", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="量化交易系统",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-st.title("量化交易系统 · 首页")
+from quant_trading_system.dashboard.ui_theme import apply_theme
+from quant_trading_system.dashboard.auth import require_login
+
+apply_theme()
+require_login("量化交易系统")
+
 st.markdown(
     """
-请从**左侧**进入功能（同一地址，不必开多个端口）：
-
-| 菜单 | 做什么 | 结果用在哪 |
-|------|--------|------------|
-| **持仓与卖出区间** | 维护持仓、「记录卖出」同步、卖出/止损/深套分批 | 日常决策；券商卖出后须在本页登记 |
-| **个股诊断与扫描** | 单票打分、条件选股 | 找标的；扫描结果可进回测股票池 |
-| **研究工具** | 合成数据快速回测、持仓组合风险诊断 | 验证策略思路、看组合是否超限 |
-
-默认打开后点 **「持仓与卖出区间」** 即可回到你最常用的页面。
-"""
+<div class="qts-hero">
+  <div class="brand">QUANT SYS · PERSONAL DESK</div>
+  <h1 style="margin:0;color:#e8f1ff">◈ 量化交易系统</h1>
+  <p style="margin:0.35rem 0 0;color:#8b9bb8">本地持仓助手 · 卖出区间 · 诊断扫描 · 研究回测</p>
+</div>
+""",
+    unsafe_allow_html=True,
 )
-st.info("提示：侧栏「首页」只是导航说明；业务数据都在下面三个菜单里。")
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.markdown('<div class="qts-card"><div class="badge">DAILY</div><h3>持仓与卖出区间</h3><p>维护持仓、记录卖出、资金与可买性、深套分批。</p></div>', unsafe_allow_html=True)
+with c2:
+    st.markdown('<div class="qts-card"><div class="badge">SCAN</div><h3>个股诊断与扫描</h3><p>单票评分与条件扫描，标注是否买得起。</p></div>', unsafe_allow_html=True)
+with c3:
+    st.markdown('<div class="qts-card"><div class="badge">LAB</div><h3>研究工具</h3><p>合成回测与组合风险，研究用。</p></div>', unsafe_allow_html=True)
+
+st.caption("请从左侧进入功能页。")

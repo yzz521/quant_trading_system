@@ -24,8 +24,7 @@ from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
 from .holdings import Holdings
-from .scheduler_state import record_run
-from .corporate_actions import fetch_upcoming_dividends
+from .buy_power import annotate_list
 from .holdings_action import analyze_holding_actions
 
 try:
@@ -136,40 +135,41 @@ class MarketScheduler:
             except Exception as e:  # noqa: BLE001
                 log.warning("[%s] 持仓动作分析失败: %s", market, e)
 
-        # 公司行为（分红/除权），失败不阻断
-        corp_actions = []
+        # 资金约束标注（未设总资金则跳过）
+        capital_snapshot = None
         try:
-            codes = [h.get("code") for h in (holdings or []) if h.get("code")]
-            if not codes:
-                codes = list(self.stock_pools.get(market, []) or [])
-            corp_actions = fetch_upcoming_dividends(codes, within_days=14)
+            capital_snapshot = self.holdings.capital_snapshot()
+            if capital_snapshot is not None:
+                _, diagnoses = annotate_list(
+                    diagnoses, holdings_mgr=self.holdings,
+                    price_key="price", default_market=market,
+                )
+                if scan_hits:
+                    _, scan_hits = annotate_list(
+                        scan_hits, holdings_mgr=self.holdings,
+                        price_key="close", default_market=market,
+                    )
+                capital_snapshot = self.holdings.capital_snapshot()
+                log.info(
+                    "[%s] 资金 总%.0f 占用%.0f 可用%.0f",
+                    market,
+                    capital_snapshot["total_capital"],
+                    capital_snapshot["invested_cost"],
+                    capital_snapshot["available_cash"],
+                )
         except Exception as e:  # noqa: BLE001
-            log.warning("[%s] 公司行为拉取失败: %s", market, e)
+            log.warning("[%s] 可买性标注失败: %s", market, e)
+            capital_snapshot = None
 
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
             holdings=holdings or None, holdings_summary=h_summary,
             holding_actions=holding_actions,
-            corporate_actions=corp_actions or None,
+            capital_snapshot=capital_snapshot,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
-        try:
-            results = self.notifier.send(title, text, html)
-            channels = list(getattr(self.notifier, "channels", []) or [])
-            notify_ok = True
-            if channels and isinstance(results, dict):
-                notify_ok = any(v == "ok" for k, v in results.items() if k != "_print")
-            detail = f"diagnoses={len(diagnoses)} scan={len(scan_hits or [])}"
-            record_run(
-                market, ok=True, detail=detail,
-                holdings_n=len(holdings or []),
-                actions_n=len(holding_actions or []) if holding_actions else 0,
-                channels=channels, notify_ok=notify_ok if channels else None,
-            )
-        except Exception as e:  # noqa: BLE001
-            record_run(market, ok=False, detail=str(e), holdings_n=len(holdings or []))
-            raise
+        self.notifier.send(title, text, html)
 
     # ------------------------------------------------------------------ #
     def _scan_universe(self, market: str, scanner: StockScanner) -> list[str]:

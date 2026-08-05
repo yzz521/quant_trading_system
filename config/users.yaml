@@ -1,0 +1,12 @@
+# 复制为 config/users.yaml 后启用（勿提交真实密码到 git）
+#   cp config/users.yaml.example config/users.yaml
+#
+# 生成 password_hash（在项目根）:
+#   python -c "from quant_trading_system.dashboard.auth import hash_password; print(hash_password('你的密码'))"
+
+enabled: true
+
+users:
+  - username: admin
+    # 对应明文 changeme —— 启用后请立刻改密码并只保留 password_hash
+    password_hash: "709d139fc320f908720985106b4fab3ffb8eea44f937a874794d7005402fd669"

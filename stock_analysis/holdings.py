@@ -36,7 +36,12 @@ CREATE TABLE IF NOT EXISTS holdings (
     cost_price REAL NOT NULL DEFAULT 0,
     quantity   INTEGER NOT NULL DEFAULT 0,
     buy_date   TEXT NOT NULL DEFAULT ''
-)
+);
+CREATE TABLE IF NOT EXISTS account (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    total_capital     REAL NOT NULL DEFAULT 0,
+    max_position_pct  REAL NOT NULL DEFAULT 0.30
+);
 """
 
 _COLUMNS = ("code", "name", "market", "cost_price", "quantity", "buy_date")
@@ -71,7 +76,10 @@ class Holdings:
     def _ensure_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
-            conn.execute(_SCHEMA)
+            conn.executescript(_SCHEMA)
+            conn.execute(
+                "INSERT OR IGNORE INTO account(id, total_capital, max_position_pct) VALUES (1, 0, 0.30)"
+            )
 
     def _migrate_from_yaml_if_needed(self) -> None:
         """One-time import: if the DB is empty but a holdings.yaml exists,
@@ -102,6 +110,74 @@ class Holdings:
 
     def is_empty(self) -> bool:
         return not self.positions
+
+    # ---- 资金账户（本地，不入库 git）-------------------------------- #
+    def get_account(self) -> dict:
+        """Return total_capital / max_position_pct. total_capital<=0 means unset."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT total_capital, max_position_pct FROM account WHERE id=1"
+            ).fetchone()
+        if row is None:
+            return {"total_capital": 0.0, "max_position_pct": 0.30}
+        return {
+            "total_capital": float(row["total_capital"] or 0),
+            "max_position_pct": float(row["max_position_pct"] or 0.30),
+        }
+
+    def set_account(self, total_capital: Optional[float] = None,
+                    max_position_pct: Optional[float] = None) -> dict:
+        acc = self.get_account()
+        if total_capital is not None:
+            acc["total_capital"] = max(0.0, float(total_capital))
+        if max_position_pct is not None:
+            pct = float(max_position_pct)
+            if pct > 1.0:  # allow UI input as 30 meaning 30%
+                pct = pct / 100.0
+            acc["max_position_pct"] = min(max(pct, 0.05), 1.0)
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO account(id, total_capital, max_position_pct) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "total_capital=excluded.total_capital, "
+                "max_position_pct=excluded.max_position_pct",
+                (acc["total_capital"], acc["max_position_pct"]),
+            )
+        return acc
+
+    def set_total_capital(self, capital: float) -> dict:
+        return self.set_account(total_capital=capital)
+
+    def invested_cost(self) -> float:
+        """Sum of cost_price * quantity (conservative occupancy)."""
+        total = 0.0
+        for p in self.all():
+            total += float(p.get("cost_price") or 0) * float(p.get("quantity") or 0)
+        return round(total, 2)
+
+    def available_cash(self) -> Optional[float]:
+        """None if total_capital unset; else max(0, total - invested_cost)."""
+        acc = self.get_account()
+        cap = float(acc.get("total_capital") or 0)
+        if cap <= 0:
+            return None
+        return round(max(0.0, cap - self.invested_cost()), 2)
+
+    def capital_snapshot(self) -> Optional[dict]:
+        """Summary for UI/email; None if capital not configured."""
+        acc = self.get_account()
+        cap = float(acc.get("total_capital") or 0)
+        if cap <= 0:
+            return None
+        invested = self.invested_cost()
+        avail = max(0.0, cap - invested)
+        return {
+            "total_capital": round(cap, 2),
+            "invested_cost": invested,
+            "available_cash": round(avail, 2),
+            "max_position_pct": float(acc.get("max_position_pct") or 0.30),
+            "utilization_pct": round(invested / cap * 100, 1) if cap else 0.0,
+        }
 
     # ---- CRUD (used by the holdings dashboard) ----------------------- #
     def add(self, code: str, name: str = "", market: str = "CN",

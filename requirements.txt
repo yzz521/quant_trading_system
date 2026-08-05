@@ -1,4 +1,7 @@
 # Quantitative Trading System — Python dependencies
+# 以可编辑方式安装本项目，使 `import quant_trading_system` 在任意部署环境（如云端）可用
+-e .
+
 # Core (required)
 pandas>=2.0
 numpy>=1.24

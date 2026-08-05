@@ -1,0 +1,19 @@
+# Space 专用：以可编辑方式安装本项目，使 `import quant_trading_system` 在空间内可用
+-e .
+
+# Quantitative Trading System — Python dependencies
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+pyarrow>=12.0          # parquet cache backend
+pyyaml>=6.0
+
+# Data sources
+akshare>=1.10          # A股 / 港股 / 期货
+yfinance>=0.2.30       # 美股 / 黄金 / ETF
+
+# Machine learning (MLStrategy)
+scikit-learn>=1.3
+
+# Dashboard
+streamlit>=1.28

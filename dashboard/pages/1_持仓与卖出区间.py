@@ -27,6 +27,12 @@ from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.sell_zone import analyze_positions
 from quant_trading_system.stock_analysis.trade_monitor import TradeMonitor
 
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.auth import require_login
+apply_theme()
+require_login()
+page_header("持仓指挥台", "资金约束 · 本地账本 · 卖出区间与动作建议", "Holdings")
+
 MARKETS = ["CN", "US", "HK"]
 
 # 兼容旧路径：Holdings 内部会自动切换到同目录的 holdings.db
@@ -58,6 +64,39 @@ tab_overview, tab_sell, tab_paste, tab_add, tab_edit, tab_delete, tab_sellzone =
 
 # =========================== 持仓总览 =========================== #
 with tab_overview:
+
+    # ---- 资金账户 ----
+    st.markdown("##### 💰 资金账户（计划投入）")
+    acc = _holder.get_account()
+    snap = _holder.capital_snapshot()
+    ca1, ca2, ca3, ca4 = st.columns([1.2, 1, 1, 1])
+    with ca1:
+        new_cap = st.number_input(
+            "总资金（元）", min_value=0.0, value=float(acc.get("total_capital") or 0),
+            step=1000.0, key="acct_total_cap",
+            help="计划投入股市的预算。填 0 表示不启用可买性过滤。",
+        )
+    with ca2:
+        new_pct = st.number_input(
+            "单票上限 %", min_value=5.0, max_value=100.0,
+            value=float(acc.get("max_position_pct") or 0.30) * 100,
+            step=5.0, key="acct_max_pct",
+        )
+    if st.button("保存资金设置", key="save_acct"):
+        _holder.set_account(total_capital=float(new_cap), max_position_pct=float(new_pct) / 100.0)
+        st.success("已保存")
+        st.rerun()
+    snap = _holder.capital_snapshot()
+    if snap:
+        ca3.metric("持仓占用(成本)", f"{snap['invested_cost']:,.0f}")
+        ca4.metric("可用资金", f"{snap['available_cash']:,.0f}",
+                   f"使用率 {snap['utilization_pct']}%")
+        if snap["available_cash"] <= 0:
+            st.caption("可用为 0：新开仓推荐将标为资金不足；以持仓卖出/减仓腾出额度为主。")
+    else:
+        st.caption("未设置总资金时，邮件推荐不做「买不买得起」标注。")
+    st.divider()
+
     st.info(
         "持仓以本系统 **config/holdings.db** 为准。"
         "券商里卖出后，请用「💸 记录卖出」或「📋 粘贴成交」同步；"
