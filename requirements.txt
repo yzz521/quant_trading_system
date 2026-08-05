@@ -8,6 +8,7 @@ numpy>=1.24
 matplotlib>=3.7
 pyarrow>=12.0          # parquet cache backend
 pyyaml>=6.0
+requests>=2.28         # notifier / 推送通道（email、Server酱、飞书）
 
 # Data sources (install what you need)
 akshare>=1.10          # A股 / 港股 / 期货
