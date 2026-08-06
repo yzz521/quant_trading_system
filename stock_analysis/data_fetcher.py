@@ -294,11 +294,21 @@ def fetch_kline_tencent(info: MarketInfo, days: int = 120) -> pd.DataFrame:
     try:
         _clear_proxy()
         import json
+        import time
         import urllib.request
         url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
                f"param={info.symbol},day,,,{days},qfq")
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+        raw = None
+        # 腾讯批量K线对短时间大量请求会返回 501/5xx（限流），带退避重试
+        for attempt in range(3):
+            try:
+                raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+                break
+            except Exception:  # noqa: BLE001
+                if attempt == 2:
+                    raise
+                time.sleep(0.3 * (attempt + 1))
         data = json.loads(raw)
         node = (data.get("data") or {}).get(info.symbol) or {}
         rows = node.get("qfqday") or node.get("day") or []
@@ -316,6 +326,48 @@ def fetch_kline_tencent(info: MarketInfo, days: int = 120) -> pd.DataFrame:
         return df[["open", "high", "low", "close", "volume"]]
     except Exception as e:  # noqa: BLE001
         log.warning("腾讯日K获取失败 %s: %s", info.code, e)
+        return pd.DataFrame()
+
+
+def fetch_kline_sina_api(info: MarketInfo, days: int = 120) -> pd.DataFrame:
+    """新浪日K JSON 接口（纯 urllib，线程安全，带退避重试）。
+
+    腾讯 fqkline 接口短时间大量请求会被 WAF 临时封禁（HTTP 501），
+    新浪接口稳定且无 akshare 的线程安全问题，故漏斗 L3 用它。
+    返回：open/high/low/close/volume + DatetimeIndex。
+    """
+    try:
+        _clear_proxy()
+        import json
+        import time
+        import urllib.request
+        url = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20_="
+               "/CN_MarketDataService.getKLineData"
+               f"?symbol={info.symbol}&scale=240&ma=no&datalen={days}")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = None
+        for attempt in range(3):
+            try:
+                raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+                break
+            except Exception:  # noqa: BLE001
+                if attempt == 2:
+                    raise
+                time.sleep(0.3 * (attempt + 1))
+        start, end = raw.find("("), raw.rfind(")")
+        if start < 0 or end <= start:
+            return pd.DataFrame()
+        data = json.loads(raw[start + 1:end])
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data).rename(columns={"day": "datetime"})
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.set_index("datetime").sort_index()
+        return df[["open", "high", "low", "close", "volume"]]
+    except Exception as e:  # noqa: BLE001
+        log.warning("新浪日K获取失败 %s: %s", info.code, e)
         return pd.DataFrame()
 
 

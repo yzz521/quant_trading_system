@@ -21,7 +21,7 @@ import pandas as pd
 from ..utils import get_logger
 from .data_fetcher import (
     detect_market,
-    fetch_kline_tencent,
+    fetch_kline_sina_api,
     fetch_money_flow,
     fetch_stock_news,
     fetch_spot_snapshot,
@@ -40,6 +40,7 @@ DEFAULTS = {
     "min_turnover": 0.3,           # L2 换手率下限（%）
     "l3_limit": 80,                # L3 技术面后进入 L4 的候选数
     "l3_conditions": ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"],
+    "l3_workers": 5,               # L3 并发数（腾讯K线限流敏感，不宜太高）
     "main_net_bonus": 10,          # L4 主力净流入为正时的加分
     "news_enabled": True,          # L4 新闻风险层开关
     "news_days": 7,                # 只看近 N 天新闻/公告
@@ -121,11 +122,11 @@ class FunnelScanner:
     # ------------------------------------------------------------------ #
     # L3 技术面 —— 复用 StockScanner 条件与评分（多线程）
     # ------------------------------------------------------------------ #
-    def _make_tencent_evaluator(self, name_map: dict) -> Callable:
-        """基于腾讯日K的单票评估器（纯 urllib，线程安全）。
+    def _make_funnel_evaluator(self, name_map: dict) -> Callable:
+        """基于新浪日K JSON 接口的单票评估器（纯 urllib，线程安全）。
 
-        akshare 的新浪日K接口底层含非线程安全的 JS 引擎，多线程会崩溃，
-        故漏斗 L3 不用 ``StockScanner._evaluate``，改走腾讯K线。
+        akshare 新浪日K含非线程安全 JS 引擎（多线程崩溃）、腾讯 fqkline 会被
+        WAF 临时封禁，故 L3 直接用新浪 JSON 接口。
         """
         from .indicators import add_all_indicators
         from .patterns import scan_signals
@@ -133,7 +134,7 @@ class FunnelScanner:
         def evaluate(code: str, resolved: list) -> Optional[ScanHit]:
             try:
                 info = detect_market(code)
-                df = fetch_kline_tencent(info, days=120)
+                df = fetch_kline_sina_api(info, days=120)
                 if df.empty or len(df) < 30:
                     return None
                 df = add_all_indicators(df)
@@ -181,10 +182,11 @@ class FunnelScanner:
             log.warning("漏斗 L3 无有效条件")
             return []
         if evaluator is None:
-            evaluator = self._make_tencent_evaluator(name_map or {})
+            evaluator = self._make_funnel_evaluator(name_map or {})
 
         hits: list[ScanHit] = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+        workers = int(self.cfg.get("l3_workers") or 5)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(evaluator, c, resolved) for c in codes]
             for fut in as_completed(futs):
                 try:
