@@ -65,7 +65,8 @@ def test_l3_sorts_and_limits():
 
 
 def test_l4_bonus_dedup_topn(monkeypatch):
-    f = _scanner(top_n=10, main_net_bonus=10)
+    # 关闭新闻层，避免测试依赖真实网络新闻（CI 上 600009 会命中风险关键词）
+    f = _scanner(top_n=10, main_net_bonus=10, news_enabled=False)
 
     def fake_mf(code):
         return {"main_net": 1e8 if code == "600009" else None, "date": "2026-08-05"}
