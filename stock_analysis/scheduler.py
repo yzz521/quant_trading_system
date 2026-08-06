@@ -42,6 +42,7 @@ class MarketScheduler:
         self.cfg = load_yaml(config_path) or {}
         self.stock_pools = self.cfg.get("stock_pools", {})
         self.scan_cfg = self.cfg.get("scan", {})
+        self.funnel_cfg = self.cfg.get("funnel", {}) or {}
         sched = self.cfg.get("schedule", {})
         self.cn_interval = int(sched.get("cn_interval_min", 60)) * 60
         self.ushk_interval = int(sched.get("ushk_interval_min", 10)) * 60
@@ -192,6 +193,29 @@ class MarketScheduler:
         self.notifier.send(title, text, html)
 
     # ------------------------------------------------------------------ #
+    def _run_funnel_cycle(self) -> None:
+        """收盘后跑一次全市场四层漏斗并推送（仅 CN）。"""
+        from .funnel import FunnelScanner
+
+        log.info("[CN] 收盘漏斗开始 ...")
+        funnel = FunnelScanner(self.funnel_cfg).run(holdings_mgr=self.holdings)
+        if not funnel.get("hits"):
+            log.warning("[CN] 收盘漏斗无命中，不推送")
+            return
+        title, text, html = build_market_message(
+            "CN", [], None,
+            scan_enabled=False,
+            holdings=None,
+            funnel=funnel,
+        )
+        log.info("[CN] 漏斗推送:\n%s", text[:300])
+        self.notifier.send(title, text, html)
+
+    def run_funnel_once(self) -> None:
+        """立即执行一次收盘漏斗（供 --once-daily 与冒烟测试使用）。"""
+        self._run_funnel_cycle()
+
+    # ------------------------------------------------------------------ #
     def _scan_universe(self, market: str, scanner: StockScanner) -> list[str]:
         """Return the scan candidate pool for a market.
 
@@ -232,6 +256,7 @@ class MarketScheduler:
         log.info("调度器启动 | A股每%ds / 美股港股每%ds",
                  self.cn_interval, self.ushk_interval)
         last = {"CN": 0.0, "HK": 0.0, "US": 0.0}
+        last_funnel = None
         try:
             while True:
                 now_ts = time.time()
@@ -246,6 +271,16 @@ class MarketScheduler:
                         except Exception as e:  # noqa: BLE001
                             log.error("[%s] 执行失败: %s", m, e)
                         last[m] = now_ts
+                # 收盘漏斗：交易日 15:10-16:00 窗口，一天一次
+                if self.funnel_cfg.get("enabled", False) and now.weekday() < 5:
+                    today = now.date()
+                    hm = now.hour * 60 + now.minute
+                    if last_funnel != today and 15 * 60 + 10 <= hm < 16 * 60:
+                        try:
+                            self._run_funnel_cycle()
+                        except Exception as e:  # noqa: BLE001
+                            log.error("[CN] 收盘漏斗失败: %s", e)
+                        last_funnel = today
                 status = {m: ("开" if self._in_session(m, now) else "休")
                           for m in self.enabled_markets}
                 log.info("状态 %s", status)

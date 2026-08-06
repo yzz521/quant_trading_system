@@ -129,6 +129,7 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
                          holding_actions: Optional[list] = None,
                          capital_snapshot: Optional[dict] = None,
                          ai_summary: Optional[str] = None,
+                         funnel: Optional[dict] = None,
                          ) -> tuple[str, str, str]:
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
@@ -197,23 +198,40 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
         html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
 
     # --- diagnosis block ---
-    text_parts.append(f"== {mname}自选股诊断 ==")
-    html_parts.append(_html_section(f"📊 {mname}自选股诊断", _diagnoses_html(diagnoses)))
-    for d in diagnoses:
-        signals = "/".join(s["name"] for s in d.get("signals", [])) or "无信号"
-        adv = d.get("advice", {}) or {}
-        buy, stop, take = adv.get("buy_price"), adv.get("stop_loss"), adv.get("take_profit")
-        advice_str = (f" | 买{buy}/止损{stop}/止盈{take}" if buy
-                      else (f" | 离场位{stop}" if stop else ""))
-        tag = d.get("buy_label") or ""
-        text_parts.append(
-            f"{d['code']} {d['name']} | 评分{d['score']} {d['rating']} | "
-            f"{d['trend']} | {d['price']} ({_fmt_pct(d['change_pct'])}) | {signals}{advice_str}"
-            + (f" | {tag}" if tag else "")
-        )
+    if diagnoses:
+        text_parts.append(f"== {mname}自选股诊断 ==")
+        html_parts.append(_html_section(f"📊 {mname}自选股诊断", _diagnoses_html(diagnoses)))
+        for d in diagnoses:
+            signals = "/".join(s["name"] for s in d.get("signals", [])) or "无信号"
+            adv = d.get("advice", {}) or {}
+            buy, stop, take = adv.get("buy_price"), adv.get("stop_loss"), adv.get("take_profit")
+            advice_str = (f" | 买{buy}/止损{stop}/止盈{take}" if buy
+                          else (f" | 离场位{stop}" if stop else ""))
+            tag = d.get("buy_label") or ""
+            text_parts.append(
+                f"{d['code']} {d['name']} | 评分{d['score']} {d['rating']} | "
+                f"{d['trend']} | {d['price']} ({_fmt_pct(d['change_pct'])}) | {signals}{advice_str}"
+                + (f" | {tag}" if tag else "")
+            )
 
     # --- scan block (with optional buy-power split) ---
-    if scan_enabled and scan_hits:
+    if funnel and funnel.get("hits"):
+        text_parts.append("")
+        stages = funnel.get("stages", [])
+        stats = " → ".join(str(s.get("after")) for s in stages)
+        text_parts.append(
+            f"== 收盘漏斗 Top{len(funnel['hits'])}（全市场 {funnel.get('total', '?')} 只 → {stats}） =="
+        )
+        for h in funnel["hits"]:
+            mf = f" 主力{_fmt_amount(h.get('main_net'))}" if h.get("main_net") is not None else ""
+            text_parts.append(
+                f"{h['code']} {h['name']} | {h['close']} ({_fmt_pct(h.get('change_pct'))}) | "
+                f"评分{h['score']} | 市值{h.get('market_cap')}亿 PE{h.get('pe')} "
+                f"换手{h.get('turnover')}%{mf} | {_fmt_matched(h)}"
+                + (f" | {h.get('buy_label')}" if h.get("buy_label") else "")
+            )
+        html_parts.append(_html_section("🔻 收盘漏斗关注池", _funnel_html(funnel)))
+    elif scan_enabled and scan_hits:
         text_parts.append("")
         has_tags = any(h.get("buy_tag") for h in scan_hits)
         if has_tags:
@@ -316,6 +334,50 @@ def _fmt_matched(h: dict) -> str:
         else:
             parts.append(m)
     return "、".join(parts)
+
+
+def _fmt_amount(v) -> str:
+    """金额格式化：亿/万/元。"""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:+.2f}亿"
+    if abs(v) >= 1e4:
+        return f"{v / 1e4:+.0f}万"
+    return f"{v:+.0f}"
+
+
+def _funnel_html(funnel: dict) -> str:
+    """收盘漏斗关注池表格：市值/PE/换手/主力净流入/命中/可买性。"""
+    stages = funnel.get("stages", [])
+    stats = " → ".join(str(s.get("after")) for s in stages)
+    head = (
+        f"<p style='color:#6b7280;font-size:12px;padding:6px 0'>"
+        f"漏斗：{funnel.get('total', '?')} 只 → {stats}，耗时 {funnel.get('elapsed', '-')}s</p>"
+    )
+    rows = ""
+    for h in funnel.get("hits", [])[:20]:
+        ccls = "up" if (h.get("change_pct") or 0) >= 0 else "down"
+        mf = _fmt_amount(h.get("main_net"))
+        tag = h.get("buy_label") or ""
+        rows += (
+            f"<tr><td>{h.get('code')}</td><td>{h.get('name')}</td>"
+            f"<td>{h.get('close')}</td><td class='{ccls}'>{_fmt_pct(h.get('change_pct'))}</td>"
+            f"<td><span class='tag' style='background:#1f77b4'>{h.get('score')}</span></td>"
+            f"<td>{h.get('market_cap') if h.get('market_cap') is not None else '—'}</td>"
+            f"<td>{h.get('pe') if h.get('pe') is not None else '—'}</td>"
+            f"<td>{h.get('turnover') if h.get('turnover') is not None else '—'}</td>"
+            f"<td>{mf}</td><td style='font-size:12px'>{_fmt_matched(h)}</td>"
+            f"<td style='font-size:12px'>{tag}</td></tr>"
+        )
+    return head + (
+        "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
+        "<th>评分</th><th>市值(亿)</th><th>PE</th><th>换手%</th>"
+        "<th>主力净流入</th><th>命中</th><th>可买性</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
 
 
 def _holdings_html(holdings: list, summary: Optional[dict]) -> str:
