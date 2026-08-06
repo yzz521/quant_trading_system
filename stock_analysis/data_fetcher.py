@@ -317,3 +317,37 @@ def fetch_kline_tencent(info: MarketInfo, days: int = 120) -> pd.DataFrame:
     except Exception as e:  # noqa: BLE001
         log.warning("腾讯日K获取失败 %s: %s", info.code, e)
         return pd.DataFrame()
+
+
+def fetch_stock_news(code: str, days: int = 7, limit: int = 20) -> list[dict]:
+    """新浪个股新闻/公告（JSON API）→ [{title, url, ctime}]，按时间倒序，超时/失败返回 []。
+
+    用于漏斗 L4 新闻风险层：标题命中风险关键词（诉讼/减持/立案等）时降分提示。
+    """
+    try:
+        _clear_proxy()
+        import json
+        import time as _time
+        import urllib.request
+        sym = detect_market(code).code
+        url = ("https://feed.mix.sina.com.cn/api/roll/get?"
+               f"pageid=153&lid=2509&k={sym}&num={limit}&page=1")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        items = ((data.get("result") or {}).get("data")) or []
+        cutoff = _time.time() - max(int(days), 1) * 86400
+        out: list[dict] = []
+        for it in items:
+            ct = int(it.get("ctime") or 0)
+            if ct < cutoff:
+                continue
+            out.append({
+                "title": str(it.get("title") or ""),
+                "url": str(it.get("url") or ""),
+                "ctime": ct,
+            })
+        return out
+    except Exception as e:  # noqa: BLE001
+        log.debug("个股新闻不可用 %s: %s", code, e)
+        return []

@@ -96,3 +96,37 @@ def test_l4_bonus_dedup_topn(monkeypatch):
 
 def test_batches_chunking():
     assert [len(x) for x in _batches(list(range(10)), 3)] == [3, 3, 3, 1]
+
+
+def test_news_risk_pass_penalizes_and_flags():
+    f = _scanner(
+        news_enabled=True,
+        news_penalty=15,
+        news_risk_keywords=["诉讼", "减持", "退市"],
+    )
+    items = [
+        {"code": "600001", "score": 50},
+        {"code": "600002", "score": 50},
+    ]
+
+    def fake_news(code, days=7, limit=20):
+        if code == "600001":
+            return [{"title": "关于重大诉讼的公告", "url": "http://x", "ctime": 0}]
+        return [{"title": "三季度业绩说明会", "url": "http://y", "ctime": 0}]
+
+    out = f._news_risk_pass(items, news_fetcher=fake_news)
+    by = {it["code"]: it for it in out}
+    assert by["600001"]["score"] == 35
+    assert by["600001"]["risk_flag"] is True
+    assert by["600001"]["news_risks"][0]["keywords"] == ["诉讼"]
+    assert by["600002"]["score"] == 50
+    assert by["600002"]["news_risks"] == []
+    assert not by["600002"].get("risk_flag")
+
+
+def test_news_risk_pass_disabled():
+    f = _scanner(news_enabled=False)
+    items = [{"code": "600001", "score": 50}]
+    out = f._news_risk_pass(items)
+    assert out[0]["score"] == 50
+    assert "news_risks" not in out[0]

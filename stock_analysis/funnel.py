@@ -23,6 +23,7 @@ from .data_fetcher import (
     detect_market,
     fetch_kline_tencent,
     fetch_money_flow,
+    fetch_stock_news,
     fetch_spot_snapshot,
     fetch_tencent_quotes,
 )
@@ -40,6 +41,15 @@ DEFAULTS = {
     "l3_limit": 80,                # L3 技术面后进入 L4 的候选数
     "l3_conditions": ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"],
     "main_net_bonus": 10,          # L4 主力净流入为正时的加分
+    "news_enabled": True,          # L4 新闻风险层开关
+    "news_days": 7,                # 只看近 N 天新闻/公告
+    "news_limit": 20,
+    "news_penalty": 15,            # 命中风险关键词的降分
+    "news_risk_keywords": [
+        "诉讼", "立案", "减持", "质押", "冻结", "处罚", "违规", "问询",
+        "风险警示", "退市", "终止上市", "调查", "仲裁", "合同纠纷",
+        "业绩预亏", "商誉减值", "监管函", "关注函",
+    ],
 }
 
 
@@ -196,6 +206,7 @@ class FunnelScanner:
         quote_map: dict[str, dict],
         holdings_mgr=None,
         held_codes: Optional[set] = None,
+        news_fetcher: Optional[Callable] = None,
     ) -> list[dict]:
         held = {str(c).strip() for c in (held_codes or set())}
         items: list[dict] = []
@@ -218,6 +229,9 @@ class FunnelScanner:
         # 持仓去重：已持有的不再进入关注池（自选股诊断里另有覆盖）
         items = [it for it in items if str(it["code"]).strip() not in held]
 
+        # 新闻风险层：命中风险关键词的降分并标注（多线程拉取）
+        items = self._news_risk_pass(items, news_fetcher=news_fetcher)
+
         # 可买性标注（未配置总资金时 annotate_list 原样返回）
         if holdings_mgr is not None:
             try:
@@ -233,6 +247,49 @@ class FunnelScanner:
 
         items.sort(key=lambda it: it.get("score") or 0, reverse=True)
         return items[: self.cfg["top_n"]]
+
+    def _news_risk_pass(
+        self,
+        items: list[dict],
+        news_fetcher: Optional[Callable] = None,
+    ) -> list[dict]:
+        """近 N 天新闻/公告标题命中风险关键词 → 降分 + 标注 news_risks。"""
+        if not items:
+            return items
+        keywords = self.cfg.get("news_risk_keywords") or []
+        if not self.cfg.get("news_enabled", True) or not keywords:
+            return items
+        fetcher = news_fetcher or fetch_stock_news
+        days = int(self.cfg.get("news_days", 7))
+        limit = int(self.cfg.get("news_limit", 20))
+        penalty = int(self.cfg.get("news_penalty", 15))
+
+        results: dict[str, list[dict]] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            futs = {
+                ex.submit(fetcher, it["code"], days=days, limit=limit): it["code"]
+                for it in items
+            }
+            for fut in as_completed(futs):
+                code = futs[fut]
+                try:
+                    results[code] = fut.result() or []
+                except Exception:  # noqa: BLE001
+                    results[code] = []
+
+        for it in items:
+            hits = []
+            for n in results.get(str(it["code"]).strip(), []):
+                matched = [k for k in keywords if k in n.get("title", "")]
+                if matched:
+                    hits.append({"title": n["title"], "url": n["url"], "keywords": matched})
+                    if len(hits) >= 3:
+                        break
+            it["news_risks"] = hits
+            if hits:
+                it["score"] = max(0, (it.get("score") or 0) - penalty)
+                it["risk_flag"] = True
+        return items
 
     # ------------------------------------------------------------------ #
     def run(self, holdings_mgr=None) -> dict:

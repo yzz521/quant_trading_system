@@ -93,7 +93,7 @@ class MarketScheduler:
         return {m: self._in_session(m, now) for m in ("CN", "HK", "US")}
 
     # ------------------------------------------------------------------ #
-    def _run_market(self, market: str) -> None:
+    def _run_market(self, market: str, funnel: Optional[dict] = None) -> None:
         pool = self.stock_pools.get(market, [])
         if not pool:
             log.info("[%s] 股票池为空，跳过", market)
@@ -109,7 +109,7 @@ class MarketScheduler:
                 log.warning("诊断 %s 失败: %s", code, e)
 
         scan_hits = None
-        if self.scan_cfg.get("enabled", False):
+        if funnel is None and self.scan_cfg.get("enabled", False):
             try:
                 scanner = StockScanner()
                 conds = self.scan_cfg.get("conditions", ["多头排列"])
@@ -118,6 +118,11 @@ class MarketScheduler:
                     log.info("[%s] 扫描 %d 只标的 ...", market, len(universe))
                     hits = scanner.scan(universe, conds, limit=50)
                     scan_hits = [h.to_dict() for h in hits]
+                    # 盘中扫描同样剔除 ST/退市（与收盘漏斗 L1 一致）
+                    scan_hits = [
+                        h for h in scan_hits
+                        if not any(k in str(h.get("name") or "") for k in ("ST", "退"))
+                    ]
             except Exception as e:  # noqa: BLE001
                 log.error("[%s] 扫描失败: %s", market, e)
 
@@ -188,6 +193,7 @@ class MarketScheduler:
             holding_actions=holding_actions,
             capital_snapshot=capital_snapshot,
             ai_summary=ai_summary,
+            funnel=funnel,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
@@ -202,14 +208,8 @@ class MarketScheduler:
         if not funnel.get("hits"):
             log.warning("[CN] 收盘漏斗无命中，不推送")
             return
-        title, text, html = build_market_message(
-            "CN", [], None,
-            scan_enabled=False,
-            holdings=None,
-            funnel=funnel,
-        )
-        log.info("[CN] 漏斗推送:\n%s", text[:300])
-        self.notifier.send(title, text, html)
+        # 复用完整邮件流程：持仓/资金/AI点评/自选股诊断 保留，扫描块由漏斗替换
+        self._run_market("CN", funnel=funnel)
 
     def run_funnel_once(self) -> None:
         """立即执行一次收盘漏斗（供 --once-daily 与冒烟测试使用）。"""

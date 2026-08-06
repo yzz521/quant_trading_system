@@ -224,11 +224,17 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
         )
         for h in funnel["hits"]:
             mf = f" 主力{_fmt_amount(h.get('main_net'))}" if h.get("main_net") is not None else ""
+            risks = h.get("news_risks") or []
+            risk = ""
+            if risks:
+                kws = sorted({k for r in risks for k in (r.get("keywords") or [])})
+                risk = f" | ⚠️{len(risks)}条风险新闻({','.join(kws)})"
             text_parts.append(
                 f"{h['code']} {h['name']} | {h['close']} ({_fmt_pct(h.get('change_pct'))}) | "
                 f"评分{h['score']} | 市值{h.get('market_cap')}亿 PE{h.get('pe')} "
                 f"换手{h.get('turnover')}%{mf} | {_fmt_matched(h)}"
                 + (f" | {h.get('buy_label')}" if h.get("buy_label") else "")
+                + risk
             )
         html_parts.append(_html_section("🔻 收盘漏斗关注池", _funnel_html(funnel)))
     elif scan_enabled and scan_hits:
@@ -362,6 +368,14 @@ def _funnel_html(funnel: dict) -> str:
         ccls = "up" if (h.get("change_pct") or 0) >= 0 else "down"
         mf = _fmt_amount(h.get("main_net"))
         tag = h.get("buy_label") or ""
+        risk = ""
+        risks = h.get("news_risks") or []
+        if risks:
+            kws = sorted({k for r in risks for k in (r.get("keywords") or [])})
+            first_url = risks[0].get("url") or ""
+            label = f"⚠️{len(risks)}条·{','.join(kws)}"
+            risk = (f"<a href='{first_url}' style='color:#c0392b;text-decoration:none'>{label}</a>"
+                    if first_url else f"<span style='color:#c0392b'>{label}</span>")
         rows += (
             f"<tr><td>{h.get('code')}</td><td>{h.get('name')}</td>"
             f"<td>{h.get('close')}</td><td class='{ccls}'>{_fmt_pct(h.get('change_pct'))}</td>"
@@ -370,12 +384,13 @@ def _funnel_html(funnel: dict) -> str:
             f"<td>{h.get('pe') if h.get('pe') is not None else '—'}</td>"
             f"<td>{h.get('turnover') if h.get('turnover') is not None else '—'}</td>"
             f"<td>{mf}</td><td style='font-size:12px'>{_fmt_matched(h)}</td>"
-            f"<td style='font-size:12px'>{tag}</td></tr>"
+            f"<td style='font-size:12px'>{tag}</td>"
+            f"<td style='font-size:11px'>{risk}</td></tr>"
         )
     return head + (
         "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
         "<th>评分</th><th>市值(亿)</th><th>PE</th><th>换手%</th>"
-        "<th>主力净流入</th><th>命中</th><th>可买性</th></tr></thead>"
+        "<th>主力净流入</th><th>命中</th><th>可买性</th><th>新闻风险</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
 
