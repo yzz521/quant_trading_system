@@ -1,11 +1,20 @@
-# 邮件品牌：GP助手
+# AI 点评
 
-覆盖后重启调度器。若本地已有 config/notify.yaml，请手动改：
-
-```yaml
-notify:
-  email:
-    sender_name: "GP助手"
+```bash
+tar -xzf quant_trading_system_phase25_ai_summary.tar.gz
 ```
 
-标题示例：`GP助手 · A股 2026-08-05 11:00`
+config/notify.yaml:
+
+```yaml
+ai:
+  enabled: true
+  api_key: "sk-..."
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"
+```
+
+```bash
+python examples/test_ai_summary.py
+python examples/run_scheduler.py --test --market CN
+```

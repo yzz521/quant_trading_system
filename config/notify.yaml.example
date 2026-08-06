@@ -14,9 +14,10 @@ enabled_markets: ["CN", "HK", "US"]
 # 全市场扫描（与自选股诊断同时推送）
 scan:
   enabled: true
-  conditions: ["多头排列", "MACD金叉", "突破新高", "放量", "超卖"]
+  # 多头排列(新晋)=最近3日内新成立的排列，避免同一批趋势股每天重复置顶
+  conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖"]
   cn_pool: []
-  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300
+  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300；留空时按板块分层随机抽样，每天换一批
   us_pool: ["AAPL", "MSFT", "TSLA"]
   hk_pool: ["00700", "09988"]
 
@@ -63,3 +64,15 @@ schedule:
   ushk_interval_min: 10      # 美股/港股：每 10 分钟
   us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
   poll_interval_sec: 60      # 调度器主循环检查间隔
+
+
+# AI 点评（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI
+# 只根据本系统已算好的持仓与动作写人话，不替代买卖决策
+ai:
+  enabled: false
+  api_key: ""                    # 或环境变量 QTS_AI_API_KEY
+  base_url: "https://api.deepseek.com"   # 不要末尾 /v1
+  model: "deepseek-chat"
+  timeout: 60
+  max_tokens: 1200
+  temperature: 0.3

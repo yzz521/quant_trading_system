@@ -128,6 +128,7 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
                          holdings_summary: Optional[dict] = None,
                          holding_actions: Optional[list] = None,
                          capital_snapshot: Optional[dict] = None,
+                         ai_summary: Optional[str] = None,
                          ) -> tuple[str, str, str]:
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
@@ -177,6 +178,17 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
             f"满仓时「可买」常为空属正常。</p>",
         ))
 
+
+    # --- AI summary ---
+    if ai_summary:
+        text_parts.append("== GP助手 AI 点评 ==")
+        text_parts.append(ai_summary.strip())
+        text_parts.append("")
+        html_ai = "<pre style='white-space:pre-wrap;font-family:inherit;line-height:1.55;padding:8px;margin:0'>" + (
+            ai_summary.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ) + "</pre>"
+        html_parts.append(_html_section("🤖 GP助手 AI 点评", html_ai))
+
     # --- holding action (sell / add) ---
     if holding_actions:
         from .holdings_action import actions_to_text, actions_to_html
@@ -209,7 +221,7 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
             parts = partition_annotated(scan_hits, max_ok=10)
             def _scan_line(h):
                 tag = h.get("buy_label") or ""
-                matched = ", ".join(h.get("matched") or [])
+                matched = _fmt_matched(h)
                 return (
                     f"{h.get('code')} {h.get('name')} | {h.get('close')} "
                     f"({_fmt_pct(h.get('change_pct'))}) | 评分{h.get('score')} | {matched}"
@@ -292,6 +304,20 @@ def _html_section(heading: str, table_html: str) -> str:
     return f'<div class="sec"><h2>{heading}</h2>{table_html}</div>'
 
 
+def _fmt_matched(h: dict) -> str:
+    """命中条件文案：新晋条件标“新晋”，持续条件标“持续N天”。"""
+    parts = []
+    for m in h.get("matched") or []:
+        days = (h.get("matched_days") or {}).get(m)
+        if days == 1:
+            parts.append(f"{m}·新晋")
+        elif days and days > 1:
+            parts.append(f"{m}·持续{days}天")
+        else:
+            parts.append(m)
+    return "、".join(parts)
+
+
 def _holdings_html(holdings: list, summary: Optional[dict]) -> str:
     rows = ""
     for h in holdings:
@@ -358,7 +384,7 @@ def _scan_html(hits: list) -> str:
     rows = ""
     for h in hits[:30]:
         ccls = "up" if h["change_pct"] >= 0 else "down"
-        matched = "、".join(h["matched"])
+        matched = _fmt_matched(h)
         rows += (
             f"<tr><td>{h['code']}</td><td>{h['name']}</td><td>{h['close']}</td>"
             f"<td class='{ccls}'>{_fmt_pct(h['change_pct'])}</td>"
@@ -387,7 +413,7 @@ def _scan_html_annotated(hits: list) -> str:
     rows = ""
     for h in hits[:50]:
         tag = h.get("buy_label") or ""
-        matched = "、".join(h.get("matched") or [])
+        matched = _fmt_matched(h)
         rows += (
             f"<tr><td>{h.get('code')}</td><td>{h.get('name')}</td>"
             f"<td>{h.get('close')}</td><td>{_fmt_pct(h.get('change_pct'))}</td>"
@@ -399,4 +425,3 @@ def _scan_html_annotated(hits: list) -> str:
         "<th>评分</th><th>命中</th><th>可买性</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
-

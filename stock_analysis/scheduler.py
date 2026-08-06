@@ -23,6 +23,7 @@ from ..utils import get_logger, load_yaml
 from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
+from .ai_summary import generate_market_summary
 from .holdings import Holdings
 from .buy_power import annotate_list
 from .holdings_action import analyze_holding_actions
@@ -161,12 +162,31 @@ class MarketScheduler:
             log.warning("[%s] 可买性标注失败: %s", market, e)
             capital_snapshot = None
 
+
+        # AI 点评（可选，失败不影响推送）
+        ai_summary = None
+        try:
+            ai_summary = generate_market_summary(
+                self.cfg if hasattr(self, "cfg") else {},
+                market=market,
+                holdings=holdings,
+                holdings_summary=h_summary,
+                holding_actions=holding_actions,
+                capital_snapshot=capital_snapshot,
+                diagnoses=diagnoses,
+                scan_hits=scan_hits,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] AI 点评跳过: %s", market, e)
+            ai_summary = None
+
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
             holdings=holdings or None, holdings_summary=h_summary,
             holding_actions=holding_actions,
             capital_snapshot=capital_snapshot,
+            ai_summary=ai_summary,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
