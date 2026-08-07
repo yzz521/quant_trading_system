@@ -1,0 +1,31 @@
+GP助手 · 便携版（一键启动）
+============================
+
+【怎么启动】
+  macOS (M系列) : 双击 start.command（首次若被 Gatekeeper 拦截，右键 → 打开）
+  macOS (Intel) : 双击 start.command
+  Windows       : 双击 start.bat
+  Linux         : 终端执行 ./start.sh（如无执行权限先 chmod +x start.sh）
+  启动后浏览器会自动打开 http://127.0.0.1:8502
+
+【默认状态】
+  - 登录门禁默认关闭，开箱即用。
+  - 持仓为空，可在看板里自行维护（数据保存在 config/holdings.db）。
+  - 行情需要联网；部分数据源（如东方财富）在不同网络环境下可能不可用，
+    系统会自动降级到可用源。
+
+【可选配置】
+  1. 开启登录门禁：把 quant_trading_system/config/users.yaml.example 复制为
+     users.yaml，设置 enabled: true 并生成密码哈希：
+       runtime/bin/python3 -c "from quant_trading_system.dashboard.auth import hash_password; print(hash_password('你的密码'))"
+     （Windows 用 runtime\python.exe）
+  2. 邮件/定时推送：编辑 quant_trading_system/config/notify.yaml（参考
+     notify.yaml.example）填入 SMTP 凭证；不配置则看板仍可正常使用。
+
+【注意】
+  - macOS 请选择与电脑芯片匹配的包（M系列 / Intel 不通用）。
+  - Linux 包基于较新的发行版构建，建议在相近或更新的系统上运行。
+
+【停止】关闭运行窗口即可。
+
+【来源】本项目 https://github.com/yzz521/quant_trading_system
