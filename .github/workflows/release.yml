@@ -35,8 +35,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.12"
 
       - name: Assemble portable bundle
         shell: bash
@@ -47,9 +45,12 @@ jobs:
           # 只打包 git 跟踪文件（排除 .git/.venv/results 等）
           git archive HEAD | tar -x -C "$B/quant_trading_system"
 
-          # 定位 uv 托管的解释器根目录（only-managed 保证是标准布局：
+          # 显式安装并定位 uv 托管的解释器（setup-uv 的 python-version 只设置
+          # UV_PYTHON，不保证已安装；only-managed 保证布局是标准的：
           # macOS/Linux 为 <root>/bin/python3.12，Windows 为 <root>/python.exe）
+          uv python install 3.12
           PY="$(uv python find 3.12)"
+          echo "uv python: $PY"
           if [ "$RUNNER_OS" = "Windows" ]; then
             PY="$(cygpath -u "$PY")"
           fi
