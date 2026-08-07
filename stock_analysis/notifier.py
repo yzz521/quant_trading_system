@@ -78,7 +78,7 @@ class Notifier:
         c = self._notify_cfg["email"]
         msg = MIMEMultipart("alternative")
         msg["Subject"] = title
-        msg["From"] = f"{c.get('sender_name', 'StockBot')} <{c['username']}>"
+        msg["From"] = f"{c.get('sender_name', 'GP助手')} <{c['username']}>"
         msg["To"] = ", ".join(c["to"])
         msg.attach(MIMEText(text, "plain", "utf-8"))
         msg.attach(MIMEText(html, "html", "utf-8"))
@@ -125,11 +125,15 @@ class Notifier:
 def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list] = None,
                          scan_enabled: bool = True,
                          holdings: Optional[list] = None,
-                         holdings_summary: Optional[dict] = None
+                         holdings_summary: Optional[dict] = None,
+                         holding_actions: Optional[list] = None,
+                         capital_snapshot: Optional[dict] = None,
+                         ai_summary: Optional[str] = None,
+                         vibe_summary: Optional[str] = None,
                          ) -> tuple[str, str, str]:
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
-    title = f"GP分析助手 · {mname}盘面分析 {now}"
+    title = f"GP助手 · {mname} {now}"
 
     text_parts: list[str] = []
     html_parts: list[str] = []
@@ -154,6 +158,57 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
             )
             text_parts.append("")
 
+
+    # --- capital summary ---
+    if capital_snapshot:
+        cs = capital_snapshot
+        text_parts.append(
+            f"== 资金账户 ==\n"
+            f"总资金 {cs['total_capital']:,.0f} | 持仓占用(成本) {cs['invested_cost']:,.0f} | "
+            f"可用 {cs['available_cash']:,.0f} | 单票上限 {cs['max_position_pct']:.0%} | "
+            f"使用率 {cs['utilization_pct']}%\n"
+        )
+        html_parts.append(_html_section(
+            "💰 资金账户",
+            f"<p>总资金 <b>{cs['total_capital']:,.0f}</b>　"
+            f"持仓占用(成本) <b>{cs['invested_cost']:,.0f}</b>　"
+            f"可用 <b>{cs['available_cash']:,.0f}</b>　"
+            f"单票上限 <b>{cs['max_position_pct']:.0%}</b>　"
+            f"使用率 <b>{cs['utilization_pct']}%</b></p>"
+            f"<p style='color:#6b7280;font-size:12px'>可用=总资金−持仓成本（忽略浮盈，偏保守）。"
+            f"满仓时「可买」常为空属正常。</p>",
+        ))
+
+
+    # --- AI summary ---
+    if ai_summary:
+        text_parts.append("== GP助手 AI 点评 ==")
+        text_parts.append(ai_summary.strip())
+        text_parts.append("")
+        html_ai = "<pre style='white-space:pre-wrap;font-family:inherit;line-height:1.55;padding:8px;margin:0'>" + (
+            ai_summary.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ) + "</pre>"
+        html_parts.append(_html_section("🤖 GP助手 AI 点评", html_ai))
+
+    # --- Vibe secondary ---
+    if vibe_summary:
+        text_parts.append("== GP助手 · Vibe 二次分析 ==")
+        text_parts.append(vibe_summary.strip())
+        text_parts.append("")
+        html_v = "<pre style='white-space:pre-wrap;font-family:inherit;line-height:1.55;padding:8px;margin:0'>" + (
+            vibe_summary.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        ) + "</pre>"
+        html_parts.append(_html_section("🔎 Vibe 二次分析", html_v))
+
+
+
+    # --- holding action (sell / add) ---
+    if holding_actions:
+        from .holdings_action import actions_to_text, actions_to_html
+        text_parts.append(actions_to_text(holding_actions))
+        text_parts.append("")
+        html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
+
     # --- diagnosis block ---
     text_parts.append(f"== {mname}自选股诊断 ==")
     html_parts.append(_html_section(f"📊 {mname}自选股诊断", _diagnoses_html(diagnoses)))
@@ -163,21 +218,52 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
         buy, stop, take = adv.get("buy_price"), adv.get("stop_loss"), adv.get("take_profit")
         advice_str = (f" | 买{buy}/止损{stop}/止盈{take}" if buy
                       else (f" | 离场位{stop}" if stop else ""))
+        tag = d.get("buy_label") or ""
         text_parts.append(
             f"{d['code']} {d['name']} | 评分{d['score']} {d['rating']} | "
             f"{d['trend']} | {d['price']} ({_fmt_pct(d['change_pct'])}) | {signals}{advice_str}"
+            + (f" | {tag}" if tag else "")
         )
 
-    # --- scan block ---
+    # --- scan block (with optional buy-power split) ---
     if scan_enabled and scan_hits:
         text_parts.append("")
-        text_parts.append(f"== 扫描命中 {len(scan_hits)} 只 ==")
-        html_parts.append(_html_section(f"🔍 扫描命中 {len(scan_hits)} 只", _scan_html(scan_hits)))
-        for h in scan_hits[:30]:
-            text_parts.append(
-                f"{h['code']} {h['name']} | {h['close']} ({_fmt_pct(h['change_pct'])}) | "
-                f"评分{h['score']} | {', '.join(h['matched'])}"
-            )
+        has_tags = any(h.get("buy_tag") for h in scan_hits)
+        if has_tags:
+            from .buy_power import partition_annotated
+            parts = partition_annotated(scan_hits, max_ok=10)
+            def _scan_line(h):
+                tag = h.get("buy_label") or ""
+                matched = ", ".join(h.get("matched") or [])
+                return (
+                    f"{h.get('code')} {h.get('name')} | {h.get('close')} "
+                    f"({_fmt_pct(h.get('change_pct'))}) | 评分{h.get('score')} | {matched}"
+                    + (f" | {tag}" if tag else "")
+                )
+            text_parts.append(f"== 新开仓·可买（最多10只，共扫描 {len(scan_hits)}） ==")
+            if parts["ok"]:
+                for h in parts["ok"]:
+                    text_parts.append(_scan_line(h))
+            else:
+                text_parts.append("（当前可用资金下无「可买」标的，满仓时属正常）")
+            rest = parts["no_cash"] + parts["capped"] + parts["held"] + parts["other"] + parts["ok_extra"]
+            if rest:
+                text_parts.append("")
+                text_parts.append(f"== 新开仓·资金不足/已持有/其他（{len(rest)} 只） ==")
+                for h in rest[:40]:
+                    text_parts.append(_scan_line(h))
+            html_parts.append(_html_section(
+                "🔍 扫描命中（含可买性）",
+                _scan_html_annotated(scan_hits),
+            ))
+        else:
+            text_parts.append(f"== 扫描命中 {len(scan_hits)} 只 ==")
+            html_parts.append(_html_section(f"🔍 扫描命中 {len(scan_hits)} 只", _scan_html(scan_hits)))
+            for h in scan_hits[:30]:
+                text_parts.append(
+                    f"{h['code']} {h['name']} | {h['close']} ({_fmt_pct(h['change_pct'])}) | "
+                    f"评分{h['score']} | {', '.join(h['matched'])}"
+                )
 
     # --- risk block ---
     risks = []
@@ -220,7 +306,7 @@ tr:hover td{{background:#fafbfc;}}
 .foot{{padding:12px 24px;background:#f7f8fa;font-size:11px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;}}
 </style></head><body>
 <div class="card">
-  <div class="bar"><h1>{title}</h1><div class="sub">quant_trading_system 自动生成 · 开盘期间定时推送</div></div>
+  <div class="bar"><h1>{title}</h1><div class="sub">GP助手 · 开盘期间定时推送</div></div>
   {''.join(sections)}
   <div class="foot">本邮件由量化系统自动发送，内容仅供参考，不构成投资建议 · 投资有风险，决策需谨慎</div>
 </div>
@@ -318,3 +404,24 @@ def _risks_html(risks: list) -> str:
         for r in risks[:12]
     )
     return f"<ul style='padding-left:20px;margin:6px 0'>{items}</ul>"
+
+
+def _scan_html_annotated(hits: list) -> str:
+    if not hits:
+        return "<p class='neutral'>暂无</p>"
+    rows = ""
+    for h in hits[:50]:
+        tag = h.get("buy_label") or ""
+        matched = "、".join(h.get("matched") or [])
+        rows += (
+            f"<tr><td>{h.get('code')}</td><td>{h.get('name')}</td>"
+            f"<td>{h.get('close')}</td><td>{_fmt_pct(h.get('change_pct'))}</td>"
+            f"<td>{h.get('score')}</td><td>{matched}</td>"
+            f"<td>{tag}</td></tr>"
+        )
+    return (
+        "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
+        "<th>评分</th><th>命中</th><th>可买性</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+

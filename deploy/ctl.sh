@@ -118,10 +118,23 @@ run_scheduler() {
 # ------------------------------------------------------------------ #
 # 子命令: 持仓管理页面 (Streamlit)
 # ------------------------------------------------------------------ #
+
+run_holdings() {
+    local cmd="${1:-start}"
+    manage holdings "$DIR/results/holdings.pid" "$DIR/results/holdings.log" \
+        "$cmd" "$PY -m streamlit run $DIR/dashboard/holdings_app.py --server.port ${HOLDINGS_PORT:-8503} --server.headless true"
+}
+
+run_stock() {
+    local cmd="${1:-start}"
+    manage stock "$DIR/results/stock.pid" "$DIR/results/stock.log" \
+        "$cmd" "$PY -m streamlit run $DIR/dashboard/stock_app.py --server.port ${STOCK_PORT:-8504} --server.headless true"
+}
+
 run_dashboard() {
     local cmd="${1:-start}"
     manage dashboard "$DIR/results/dashboard.pid" "$DIR/results/dashboard.log" \
-        "$cmd" "$PY -m streamlit run $DIR/dashboard/holdings_app.py --server.port $PORT --server.headless true"
+        "$cmd" "$PY -m streamlit run $DIR/dashboard/unified_app.py --server.port $PORT --server.headless true"
 }
 
 # ------------------------------------------------------------------ #
@@ -148,6 +161,8 @@ EOF
 
 case "$1" in
     dashboard|page|ui)      run_dashboard "${2:-start}" ;;
+    holdings|holdings_app) run_holdings "${2:-start}" ;;
+    stock|stock_app)      run_stock "${2:-start}" ;;
     scheduler|scheduler.py) run_scheduler "${2:-start}" ;;
     start|stop|status|log|restart) run_scheduler "$1" ;;   # 兼容旧用法
     help|-h|--help)         usage ;;

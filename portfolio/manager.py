@@ -1,21 +1,17 @@
 """Portfolio: tracks cash, positions, and the equity curve.
 
-The portfolio is the single source of truth for "what do I own right now".
-It reacts to two event types:
-
-* ``MARKET`` — mark every open position to the latest bar close and append a
-  point to the equity curve.
-* ``FILL``   — update cash, position quantity and average cost on execution.
+Supports optional A-share style T+1: shares bought today are ``frozen`` and
+cannot be sold until the next session date.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Optional
 
 import pandas as pd
 
-from ..core import Bar, Direction, FillEvent, MarketEvent
+from ..core import Direction, FillEvent, MarketEvent
 from ..utils import get_logger, safe_round
 
 
@@ -26,6 +22,7 @@ class Position:
     avg_price: float = 0.0
     realized_pnl: float = 0.0
     last_price: float = 0.0
+    frozen_quantity: float = 0.0   # long shares locked by T+1 (bought today)
 
     @property
     def market_value(self) -> float:
@@ -41,43 +38,71 @@ class Position:
     def is_open(self) -> bool:
         return abs(self.quantity) > 1e-9
 
+    @property
+    def available_quantity(self) -> float:
+        """Shares that can be sold under T+1 (long side only)."""
+        if self.quantity <= 0:
+            return self.quantity  # short or flat: no long freeze concept
+        return max(0.0, self.quantity - self.frozen_quantity)
+
 
 class Portfolio:
     """Cash + positions + equity history."""
 
-    def __init__(self, initial_capital: float = 1_000_000.0, currency: str = "CNY") -> None:
+    def __init__(
+        self,
+        initial_capital: float = 1_000_000.0,
+        currency: str = "CNY",
+        t1_enabled: bool = True,
+    ) -> None:
         self.initial_capital = float(initial_capital)
         self.cash = float(initial_capital)
         self.currency = currency
+        self.t1_enabled = bool(t1_enabled)
         self.positions: dict[str, Position] = {}
         self.equity_curve: list[tuple[datetime, float]] = []
         self.fills: list[FillEvent] = []
         self.trades: list[dict] = []
         self._last_dt: Optional[datetime] = None
+        self._session_date: Optional[date] = None
         self.log = get_logger(self.__class__.__name__)
 
-    # ------------------------------------------------------------------ #
     def _get_or_create(self, symbol: str) -> Position:
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol=symbol)
         return self.positions[symbol]
 
-    # ------------------------------------------------------------------ #
-    # Event handlers
-    # ------------------------------------------------------------------ #
+    def _roll_session(self, dt: datetime) -> None:
+        """On a new calendar/session date, unfreeze yesterday's buys (T+1)."""
+        d = dt.date() if isinstance(dt, datetime) else dt
+        if self._session_date is None:
+            self._session_date = d
+            return
+        if d > self._session_date:
+            for pos in self.positions.values():
+                if pos.frozen_quantity:
+                    self.log.debug(
+                        "T+1 unfreeze %s: frozen %.0f -> 0", pos.symbol, pos.frozen_quantity
+                    )
+                    pos.frozen_quantity = 0.0
+            self._session_date = d
+
     def on_market(self, event: MarketEvent) -> None:
         if event.bar is None:
             return
         bar = event.bar
+        if self.t1_enabled:
+            self._roll_session(bar.datetime)
         pos = self._get_or_create(bar.symbol)
         pos.last_price = bar.close
         self._last_dt = bar.datetime
-        # Record equity once per bar (after all symbols updated is handled by
-        # the engine calling snapshot() at end of timestamp).
+        # Equity is recorded via snapshot() at end of timestamp by the engine.
 
     def snapshot(self, dt: Optional[datetime] = None) -> float:
         """Append current equity to the curve and return it."""
         ts = dt or self._last_dt or datetime.now()
+        if self.t1_enabled:
+            self._roll_session(ts)
         equity = self.equity
         self.equity_curve.append((ts, equity))
         return equity
@@ -85,15 +110,16 @@ class Portfolio:
     def on_fill(self, event: FillEvent) -> None:
         self.fills.append(event)
         pos = self._get_or_create(event.symbol)
+        if self.t1_enabled and event.timestamp:
+            self._roll_session(event.timestamp)
+
         signed_qty = event.quantity if event.direction == Direction.LONG else -event.quantity
-        # EXIT orders carry direction as the side that closes the position;
-        # the broker sets event.quantity positive and direction to LONG/SHORT
-        # of the closing trade. We use signed_qty consistently.
         new_qty = pos.quantity + signed_qty
 
         # Realized PnL when reducing/closing a position
-        if pos.quantity != 0 and ((signed_qty < 0 and pos.quantity > 0) or
-                                  (signed_qty > 0 and pos.quantity < 0)):
+        if pos.quantity != 0 and (
+            (signed_qty < 0 and pos.quantity > 0) or (signed_qty > 0 and pos.quantity < 0)
+        ):
             closing_qty = min(abs(signed_qty), abs(pos.quantity))
             if pos.quantity > 0:
                 realized = (event.fill_price - pos.avg_price) * closing_qty
@@ -110,26 +136,35 @@ class Portfolio:
                 "pnl": realized,
                 "exit_time": event.timestamp,
             })
+            # Selling long does not increase frozen; frozen only tracks unsettled buys.
+            # available shrinks via quantity decrease; frozen stays until day roll
+            # unless quantity falls below frozen (clamp).
         else:
-            # Opening or increasing — cash outlay/inflow
             if signed_qty > 0:
                 self.cash -= signed_qty * event.fill_price + event.commission
+                if self.t1_enabled:
+                    pos.frozen_quantity += signed_qty
             else:
                 self.cash += -signed_qty * event.fill_price - event.commission
 
-        # Update average cost on increases in the same direction
         if new_qty == 0:
             pos.avg_price = 0.0
-        elif (pos.quantity == 0) or (pos.quantity > 0 and signed_qty > 0) or \
-             (pos.quantity < 0 and signed_qty < 0):
+            pos.frozen_quantity = 0.0
+        elif (pos.quantity == 0) or (pos.quantity > 0 and signed_qty > 0) or (
+            pos.quantity < 0 and signed_qty < 0
+        ):
             pos.avg_price = (
                 (pos.avg_price * pos.quantity + event.fill_price * signed_qty) / new_qty
-                if new_qty != 0 else 0.0
+                if new_qty != 0
+                else 0.0
             )
         pos.quantity = new_qty
         pos.last_price = event.fill_price
+        if pos.quantity > 0:
+            pos.frozen_quantity = min(pos.frozen_quantity, pos.quantity)
+        else:
+            pos.frozen_quantity = 0.0
 
-    # ------------------------------------------------------------------ #
     @property
     def equity(self) -> float:
         mv = sum(p.market_value for p in self.positions.values())
@@ -137,12 +172,19 @@ class Portfolio:
 
     @property
     def exposure(self) -> float:
-        """Gross exposure as a fraction of equity."""
         eq = self.equity
         if eq <= 0:
             return 0.0
         gross = sum(abs(p.market_value) for p in self.positions.values())
         return gross / eq
+
+    def available(self, symbol: str) -> float:
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return 0.0
+        if not self.t1_enabled:
+            return pos.quantity
+        return pos.available_quantity
 
     def equity_curve_frame(self) -> pd.DataFrame:
         if not self.equity_curve:
@@ -159,6 +201,8 @@ class Portfolio:
                 rows.append({
                     "symbol": sym,
                     "quantity": p.quantity,
+                    "available": p.available_quantity if self.t1_enabled else p.quantity,
+                    "frozen": p.frozen_quantity,
                     "avg_price": p.avg_price,
                     "last_price": p.last_price,
                     "market_value": p.market_value,

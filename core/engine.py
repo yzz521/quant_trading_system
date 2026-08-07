@@ -1,27 +1,16 @@
 """The central event engine.
 
-A single-threaded event loop. Handlers are registered per :class:`EventType`;
-when an event is popped from the queue every registered handler for that
-type is invoked in registration order. Handlers may push new events (e.g.
-the strategy handler emits ``SignalEvent`` after receiving ``MarketEvent``),
-which keeps the loop running until the queue drains — exactly the behaviour
-backtesting needs, and live trading just keeps the loop alive forever.
-
-Design notes
-------------
-* The queue is a plain ``collections.deque`` — for the backtest this is the
-  fastest option and avoids threading complexity. A live engine that needs
-  to receive data from a network thread should wrap :meth:`put` in a lock
-  or swap the queue for ``queue.Queue``.
-* ``run_once`` drains the current queue and returns. Backtests call this
-  once per bar. ``run`` blocks until :meth:`stop` is called and is meant
-  for live/paper trading.
+Backtest: single-threaded ``deque`` (default, fastest).
+Live/Paper: set ``thread_safe=True`` so a network/feed thread can ``put``
+while the engine thread drains the queue.
 """
 from __future__ import annotations
 
+import queue
+import threading
 import time
 from collections import deque
-from typing import Callable, Deque
+from typing import Callable, Deque, Union
 
 from ..utils import get_logger
 from .event import Event, EventType
@@ -30,87 +19,124 @@ EventHandler = Callable[[Event], None]
 
 
 class EventEngine:
-    def __init__(self) -> None:
-        self._queue: Deque[Event] = deque()
+    def __init__(self, thread_safe: bool = False) -> None:
+        self.thread_safe = bool(thread_safe)
+        if self.thread_safe:
+            self._queue: Union[queue.Queue, Deque] = queue.Queue()
+        else:
+            self._queue = deque()
         self._handlers: dict[EventType, list[EventHandler]] = {
             et: [] for et in EventType
         }
         self._running = False
         self._events_processed = 0
+        self._lock = threading.Lock()  # protects handler list mutations
         self.log = get_logger(self.__class__.__name__)
 
-    # ------------------------------------------------------------------ #
-    # Handler registration
-    # ------------------------------------------------------------------ #
     def register(self, event_type: EventType, handler: EventHandler) -> None:
-        if handler not in self._handlers[event_type]:
-            self._handlers[event_type].append(handler)
+        with self._lock:
+            if handler not in self._handlers[event_type]:
+                self._handlers[event_type].append(handler)
 
     def unregister(self, event_type: EventType, handler: EventHandler) -> None:
-        if handler in self._handlers[event_type]:
-            self._handlers[event_type].remove(handler)
+        with self._lock:
+            if handler in self._handlers[event_type]:
+                self._handlers[event_type].remove(handler)
 
-    # ------------------------------------------------------------------ #
-    # Queue operations
-    # ------------------------------------------------------------------ #
     def put(self, event: Event) -> None:
-        """Push an event onto the queue."""
-        self._queue.append(event)
+        if self.thread_safe:
+            self._queue.put(event)  # type: ignore[union-attr]
+        else:
+            self._queue.append(event)  # type: ignore[union-attr]
 
     def put_left(self, event: Event) -> None:
-        """Push with high priority (processed next). Used for risk stops."""
-        self._queue.appendleft(event)
+        """High priority: only supported on deque (backtest). Thread-safe mode
+        falls back to normal put (FIFO)."""
+        if self.thread_safe:
+            self._queue.put(event)  # type: ignore[union-attr]
+        else:
+            self._queue.appendleft(event)  # type: ignore[union-attr]
 
     @property
     def queue_size(self) -> int:
-        return len(self._queue)
+        if self.thread_safe:
+            return self._queue.qsize()  # type: ignore[union-attr]
+        return len(self._queue)  # type: ignore[union-attr]
 
     @property
     def events_processed(self) -> int:
         return self._events_processed
 
-    # ------------------------------------------------------------------ #
-    # Loop control
-    # ------------------------------------------------------------------ #
     def _dispatch(self, event: Event) -> None:
-        for handler in list(self._handlers.get(event.type, [])):
+        with self._lock:
+            handlers = list(self._handlers.get(event.type, []))
+        for handler in handlers:
             try:
                 handler(event)
-            except Exception:  # noqa: BLE001 - keep the loop alive
+            except Exception:  # noqa: BLE001
                 self.log.exception("Handler %r failed on event %r", handler, event)
         self._events_processed += 1
 
-    def run_once(self) -> int:
-        """Drain the queue, processing every event currently pending.
+    def _pop(self, timeout: float | None = None) -> Event | None:
+        if self.thread_safe:
+            try:
+                if timeout is None:
+                    return self._queue.get_nowait()  # type: ignore[union-attr]
+                return self._queue.get(timeout=timeout)  # type: ignore[union-attr]
+            except queue.Empty:
+                return None
+        if self._queue:
+            return self._queue.popleft()  # type: ignore[union-attr]
+        return None
 
-        Returns the number of events processed. New events pushed by handlers
-        are processed in the same call, so this returns only when the queue
-        is fully empty again.
-        """
+    def run_once(self) -> int:
+        """Drain currently pending events (backtest-friendly)."""
         processed = 0
-        while self._queue:
-            event = self._queue.popleft()
+        if self.thread_safe:
+            while True:
+                event = self._pop(timeout=None)
+                if event is None:
+                    break
+                self._dispatch(event)
+                processed += 1
+            return processed
+        while self._queue:  # type: ignore[truthy-bool]
+            event = self._queue.popleft()  # type: ignore[union-attr]
             self._dispatch(event)
             processed += 1
         return processed
 
     def run(self, poll_interval: float = 0.1) -> None:
-        """Blocking loop for live/paper trading. Stops on :meth:`stop`."""
+        """Blocking loop for live/paper. Stops on :meth:`stop`."""
         self._running = True
-        self.log.info("EventEngine started (live/paper mode)")
+        self.log.info(
+            "EventEngine started (live/paper mode, thread_safe=%s)", self.thread_safe
+        )
         try:
             while self._running:
-                if self._queue:
-                    event = self._queue.popleft()
+                event = self._pop(timeout=poll_interval if self.thread_safe else None)
+                if event is not None:
                     self._dispatch(event)
-                else:
+                elif not self.thread_safe:
                     time.sleep(poll_interval)
         finally:
             self.log.info("EventEngine stopped after %d events", self._events_processed)
 
     def stop(self) -> None:
         self._running = False
+        # Drain remaining events so final fills are not lost
+        try:
+            self.run_once()
+        except Exception:
+            pass
 
     def reset(self) -> None:
-        self._queue.clear()
+        if self.thread_safe:
+            while True:
+                try:
+                    self._queue.get_nowait()  # type: ignore[union-attr]
+                except queue.Empty:
+                    break
+        else:
+            self._queue.clear()  # type: ignore[union-attr]
         self._events_processed = 0

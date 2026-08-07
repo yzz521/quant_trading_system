@@ -59,12 +59,33 @@ class DataSource(ABC):
         cache: Optional["DiskCache"] = None,
         frequency: str = "1d",
         adjust: str = "qfq",
+        *,
+        validate: bool = True,
+        strict: bool = False,
     ) -> pd.DataFrame:
         if cache is not None:
             cached = cache.get(symbol, start, end, frequency, adjust)
             if cached is not None:
-                return cached
-        df = self.get_history(symbol, start, end, frequency=frequency, adjust=adjust)
-        if cache is not None and not df.empty:
-            cache.set(symbol, df, frequency, adjust)
+                df = cached
+            else:
+                df = self.get_history(symbol, start, end, frequency=frequency, adjust=adjust)
+                if cache is not None and not df.empty:
+                    cache.set(symbol, df, frequency, adjust, source=self.name, adjust_flag=adjust)
+        else:
+            df = self.get_history(symbol, start, end, frequency=frequency, adjust=adjust)
+
+        if validate and df is not None and not df.empty:
+            from .quality import normalize_columns, validate_ohlcv
+            df = normalize_columns(df)
+            issues = validate_ohlcv(df, symbol=symbol)
+            if issues:
+                msg = "; ".join(issues)
+                if strict:
+                    raise ValueError(f"data quality failed for {symbol}: {msg}")
+                # soft: keep data but callers can log
+                try:
+                    from ..utils import get_logger
+                    get_logger(self.__class__.__name__).warning("OHLCV quality %s: %s", symbol, msg)
+                except Exception:
+                    pass
         return df

@@ -1,10 +1,14 @@
 # Quantitative Trading System — Python dependencies
+# 以可编辑方式安装本项目，使 `import quant_trading_system` 在任意部署环境（如云端）可用
+-e .
+
 # Core (required)
 pandas>=2.0
 numpy>=1.24
 matplotlib>=3.7
 pyarrow>=12.0          # parquet cache backend
 pyyaml>=6.0
+requests>=2.28         # notifier / 推送通道（email、Server酱、飞书）
 
 # Data sources (install what you need)
 akshare>=1.10          # A股 / 港股 / 期货

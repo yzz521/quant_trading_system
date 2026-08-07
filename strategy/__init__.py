@@ -10,6 +10,7 @@ from .trend_following import MovingAverageCrossStrategy, TurtleBreakoutStrategy
 from .mean_reversion import BollingerBandStrategy
 from .multi_factor import MultiFactorStrategy
 from .ml_strategy import MLStrategy
+from .registry import STRATEGY_REGISTRY, create_strategy, list_strategies, register_strategy
 
 __all__ = [
     "Strategy",
@@ -19,4 +20,8 @@ __all__ = [
     "BollingerBandStrategy",
     "MultiFactorStrategy",
     "MLStrategy",
+    "STRATEGY_REGISTRY",
+    "create_strategy",
+    "list_strategies",
+    "register_strategy",
 ]

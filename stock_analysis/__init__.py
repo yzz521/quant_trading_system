@@ -37,3 +37,5 @@ __all__ = [
     "add_all_indicators",
     "scan_signals",
 ]
+from .holdings_bridge import apply_holdings_to_portfolio, portfolio_to_holdings_rows, snapshot_compare  # noqa: F401
+from .universe import make_universe, symbols_from_scan_hits, symbols_from_holdings  # noqa: F401

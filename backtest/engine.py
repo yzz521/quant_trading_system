@@ -37,7 +37,13 @@ class BacktestConfig:
     fill_policy: str = "next_open"
     allow_short: bool = False
     lot_size: float = 1.0
+    t1_enabled: bool = True  # A-share style T+1 settlement
     min_commission: float = 5.0
+    # Broker realism
+    limit_pct: float = 0.10
+    enforce_limit: bool = True
+    max_volume_pct: float = 0.25
+    enforce_volume: bool = True
     # Sizing
     position_weight: float = 0.10
     # Risk
@@ -54,7 +60,7 @@ class BacktestEngine:
         cfg = self.config
 
         self.event_engine = EventEngine()
-        self.portfolio = Portfolio(cfg.initial_capital, cfg.currency)
+        self.portfolio = Portfolio(cfg.initial_capital, cfg.currency, t1_enabled=cfg.t1_enabled)
         self.broker = SimulatedBroker(
             commission_rate=cfg.commission_rate,
             stamp_duty=cfg.stamp_duty,
@@ -63,6 +69,10 @@ class BacktestEngine:
             allow_short=cfg.allow_short,
             lot_size=cfg.lot_size,
             min_commission=cfg.min_commission,
+            limit_pct=cfg.limit_pct,
+            enforce_limit=cfg.enforce_limit,
+            max_volume_pct=cfg.max_volume_pct,
+            enforce_volume=cfg.enforce_volume,
         )
         self.broker.set_engine(self.event_engine)
         self.sizer = EqualWeightSizer(weight=cfg.position_weight)
@@ -73,6 +83,7 @@ class BacktestEngine:
             max_drawdown=cfg.max_drawdown,
             min_cash_ratio=cfg.min_cash_ratio,
             lot_size=cfg.lot_size,
+            enforce_t1=cfg.t1_enabled,
         )
         self.execution_handler = ExecutionHandler(
             self.event_engine, self.portfolio, self.sizer,

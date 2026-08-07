@@ -16,6 +16,7 @@ env/
 
 # ---- 运行产物 / 数据缓存 / 日志 ----
 results/
+*.tar.gz
 
 # ---- 个人敏感配置（本地保留，切勿提交）----
 config/notify.yaml
@@ -23,11 +24,13 @@ config/holdings.yaml
 config/holdings.yaml.example
 config/*.local.yaml
 
-# ---- 本地 SQLite 数据库（持仓管理）----
-config/*.db
-config/*.db-journal
-config/*.db-wal
-config/*.db-shm
+# ---- 本地 SQLite 数据库（持仓管理，任意位置）----
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
 
 # ---- 本机 launchd 部署配置（提供 .example 模板）----
 deploy/*.plist
+
+config/users.yaml

@@ -1,4 +1,4 @@
-# 股票自动分析推送配置（模板）
+# GP助手推送配置（模板）
 # 使用方式：复制为 config/notify.yaml 并填入你的凭证
 #   cp config/notify.yaml.example config/notify.yaml
 
@@ -45,7 +45,7 @@ notify:
     use_ssl: true
     username: "YOUR_EMAIL@example.com"
     password: "YOUR_SMTP_AUTH_CODE"   # 授权码（非登录密码）
-    sender_name: "股票分析助手"
+    sender_name: "GP助手"
     to: ["YOUR_EMAIL@example.com"]
 
   serverchan:                # Server酱 · 微信推送 https://sct.ftqq.com
@@ -63,3 +63,25 @@ schedule:
   ushk_interval_min: 10      # 美股/港股：每 10 分钟
   us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
   poll_interval_sec: 60      # 调度器主循环检查间隔
+
+
+# AI 点评（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI
+# 只根据本系统已算好的持仓与动作写人话，不替代买卖决策
+ai:
+  enabled: false
+  api_key: ""                    # 或环境变量 QTS_AI_API_KEY
+  base_url: "https://api.deepseek.com"   # 不要末尾 /v1
+  model: "deepseek-chat"
+  timeout: 60
+  max_tokens: 1200
+  temperature: 0.3
+
+# 本地 Vibe-Trading 二次分析（发邮件时可选；需本机 serve）
+vibe:
+  enabled: false
+  on_email: true
+  candidate_count: 15     # 每次给 Vibe 的扫描候选数量（结果落盘 results/latest_scan.json）
+  base_url: "http://127.0.0.1:8899"
+  auth_key: ""
+  max_wait_sec: 120
+  poll_sec: 3

@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-trading-system"
+version = "0.1.0"
+description = "Event-driven multi-market quantitative trading framework with A-share personal assistant tools"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "yzz521" }]
+keywords = ["quant", "backtest", "trading", "event-driven"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "matplotlib>=3.7",
+  "pyarrow>=12.0",
+  "pyyaml>=6.0",
+  "requests>=2.28",
+]
+
+[project.optional-dependencies]
+data = ["akshare>=1.10", "yfinance>=0.2.30"]
+ml = ["scikit-learn>=1.3"]
+dashboard = ["streamlit>=1.28"]
+live = ["python-binance>=1.0", "ib_insync>=0.9"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4"]
+all = ["quant-trading-system[data,ml,dashboard,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/yzz521/quant_trading_system"
+Repository = "https://github.com/yzz521/quant_trading_system"
+
+[tool.setuptools]
+packages = [
+  "quant_trading_system",
+  "quant_trading_system.core",
+  "quant_trading_system.data",
+  "quant_trading_system.strategy",
+  "quant_trading_system.backtest",
+  "quant_trading_system.execution",
+  "quant_trading_system.risk",
+  "quant_trading_system.portfolio",
+  "quant_trading_system.analytics",
+  "quant_trading_system.ml",
+  "quant_trading_system.dashboard",
+  "quant_trading_system.stock_analysis",
+  "quant_trading_system.utils",
+  "quant_trading_system.config",
+  "quant_trading_system.examples",
+  "quant_trading_system.deploy",
+]
+
+# The repository root *is* the package directory named quant_trading_system.
+# When developing from a clone of this folder, install with:
+#   pip install -e ".[dev,data]"
+# from the parent of this directory after renaming, OR set package-dir.
+# For in-place layout (this folder is both root and package), use flat layout:
+
+[tool.setuptools.package-dir]
+"quant_trading_system" = "."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["results", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

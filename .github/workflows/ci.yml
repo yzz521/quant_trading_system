@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "feat-*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev,dashboard]"
+      - name: Lint
+        run: ruff check core strategy backtest risk portfolio analytics data utils stock_analysis || true
+      - name: Test
+        run: |
+          # Package folder is repo root; ensure parent is importable as quant_trading_system
+          export PYTHONPATH="$(dirname "$PWD"):$PYTHONPATH"
+          # If this directory is already named quant_trading_system, parent works;
+          # also allow flat layout via conftest.
+          pytest -q

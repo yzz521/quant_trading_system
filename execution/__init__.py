@@ -16,6 +16,7 @@ from .ctp_broker import CTPBroker
 from .ibkr_broker import IBKRBroker
 from .binance_broker import BinanceBroker
 from .live_engine import LiveTradingEngine, LiveConfig
+from .live_bar_poller import LiveBarPoller
 
 __all__ = [
     "LiveBroker",
@@ -27,4 +28,5 @@ __all__ = [
     "BinanceBroker",
     "LiveTradingEngine",
     "LiveConfig",
+    "LiveBarPoller",
 ]

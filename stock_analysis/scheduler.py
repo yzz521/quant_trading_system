@@ -23,7 +23,12 @@ from ..utils import get_logger, load_yaml
 from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
+from .ai_summary import generate_market_summary
+from .vibe_bridge import build_payload, save_latest_scan, submit_secondary_analysis
+from .vibe_format import build_display_summary
 from .holdings import Holdings
+from .buy_power import annotate_list
+from .holdings_action import analyze_holding_actions
 
 try:
     from zoneinfo import ZoneInfo
@@ -117,17 +122,123 @@ class MarketScheduler:
             except Exception as e:  # noqa: BLE001
                 log.error("[%s] 扫描失败: %s", market, e)
 
-        # 该市场持仓盈亏
+        # 落盘最新扫描命中（供 Vibe 页面/CLI 复用；只保留一份）
+        try:
+            vibe_n = int(((self.cfg or {}).get("vibe") or {}).get("candidate_count") or 15)
+            save_latest_scan(Path(__file__).resolve().parents[1], scan_hits or [], market, limit=vibe_n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] 扫描结果落盘失败: %s", market, e)
+
+        # 该市场持仓盈亏 + 卖出/加仓动作建议
         holdings, h_summary = [], None
         try:
             holdings, h_summary = self.holdings.compute_pnl(market)
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] 持仓盈亏计算失败: %s", market, e)
 
+        holding_actions = None
+        if holdings:
+            try:
+                # compute_pnl 行已含 code/cost/quantity/current_price
+                holding_actions = analyze_holding_actions(holdings)
+                log.info("[%s] 持仓动作分析 %d 只", market, len(holding_actions))
+            except Exception as e:  # noqa: BLE001
+                log.warning("[%s] 持仓动作分析失败: %s", market, e)
+
+        # 资金约束标注（未设总资金则跳过）
+        capital_snapshot = None
+        try:
+            capital_snapshot = self.holdings.capital_snapshot()
+            if capital_snapshot is not None:
+                _, diagnoses = annotate_list(
+                    diagnoses, holdings_mgr=self.holdings,
+                    price_key="price", default_market=market,
+                )
+                if scan_hits:
+                    _, scan_hits = annotate_list(
+                        scan_hits, holdings_mgr=self.holdings,
+                        price_key="close", default_market=market,
+                    )
+                capital_snapshot = self.holdings.capital_snapshot()
+                log.info(
+                    "[%s] 资金 总%.0f 占用%.0f 可用%.0f",
+                    market,
+                    capital_snapshot["total_capital"],
+                    capital_snapshot["invested_cost"],
+                    capital_snapshot["available_cash"],
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] 可买性标注失败: %s", market, e)
+            capital_snapshot = None
+
+
+        # AI 点评（可选，失败不影响推送）
+        ai_summary = None
+        try:
+            ai_summary = generate_market_summary(
+                self.cfg if hasattr(self, "cfg") else {},
+                market=market,
+                holdings=holdings,
+                holdings_summary=h_summary,
+                holding_actions=holding_actions,
+                capital_snapshot=capital_snapshot,
+                diagnoses=diagnoses,
+                scan_hits=scan_hits,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] AI 点评跳过: %s", market, e)
+            ai_summary = None
+
+        # Vibe 二次分析（可选；超时/失败不阻断邮件）
+        vibe_summary = None
+        vibe_cfg = (self.cfg or {}).get("vibe") or {}
+        if vibe_cfg.get("enabled") and vibe_cfg.get("on_email", True):
+            try:
+                from pathlib import Path as _P
+                root = _P(__file__).resolve().parents[1]
+                vibe_n = int(vibe_cfg.get("candidate_count") or 15)
+                payload = build_payload(
+                    holdings=holdings or [],
+                    holding_actions=holding_actions,
+                    capital_snapshot=capital_snapshot,
+                    candidates=(scan_hits or [])[: vibe_n],
+                    market=market,
+                )
+                base = str(vibe_cfg.get("base_url") or "http://127.0.0.1:8899")
+                auth = str(vibe_cfg.get("auth_key") or "")
+                wait = float(vibe_cfg.get("max_wait_sec") or 120)
+                vres = submit_secondary_analysis(
+                    payload,
+                    root=root,
+                    base_url=base,
+                    auth_key=auth,
+                    max_wait_sec=wait,
+                    poll_sec=float(vibe_cfg.get("poll_sec") or 3),
+                )
+                if vres.get("clean_summary"):
+                    vibe_summary = vres["clean_summary"]
+                elif vres.get("summary"):
+                    disp = build_display_summary(vres.get("summary") or "")
+                    vibe_summary = disp.get("clean_summary") or (vres.get("summary") or "")[:2000]
+                if vres.get("partial") and vibe_summary:
+                    vibe_summary = "（Vibe 过程稿摘要）\n" + vibe_summary
+                if not vibe_summary and vres.get("error"):
+                    log.warning("[%s] Vibe 无正文: %s", market, vres.get("error"))
+                else:
+                    log.info("[%s] Vibe 二次分析 ok=%s partial=%s", market, vres.get("ok"), vres.get("partial"))
+            except Exception as e:  # noqa: BLE001
+                log.warning("[%s] Vibe 跳过: %s", market, e)
+                vibe_summary = None
+
+
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
             holdings=holdings or None, holdings_summary=h_summary,
+            holding_actions=holding_actions,
+            capital_snapshot=capital_snapshot,
+            ai_summary=ai_summary,
+            vibe_summary=vibe_summary,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
