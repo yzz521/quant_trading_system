@@ -247,23 +247,6 @@ python deploy/ctl.py start-all
 - 配置：`config/notify.yaml` 的 `vibe:` 段（`enabled` / `on_email` / `candidate_count`）。
 - 详细说明见 [docs/VIBE_BRIDGE.md](docs/VIBE_BRIDGE.md)、[docs/VIBE_ON_EMAIL.md](docs/VIBE_ON_EMAIL.md)。
 
----
-
-## 一键发布便携包（Release）
-
-打一个 `v*` tag 即可由 GitHub Actions 自动构建 **macOS / Windows** 便携包并挂到
-Release（内含独立 Python 运行时 + 全部依赖 + 一键启动脚本，解压双击即用）：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-构建配置见 `.github/workflows/release.yml`，启动脚本与依赖清单在 `packaging/`。
-便携包默认关闭登录门禁、持仓为空；数据与配置均在本机，不入包。
-
----
-
 ## 配置与安全
 
 | 文件 | 说明 |
