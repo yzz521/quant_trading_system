@@ -14,31 +14,11 @@ enabled_markets: ["CN", "HK", "US"]
 # 全市场扫描（与自选股诊断同时推送）
 scan:
   enabled: true
-  # 多头排列(新晋)=最近3日内新成立的排列，避免同一批趋势股每天重复置顶
-  conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖"]
+  conditions: ["多头排列", "MACD金叉", "突破新高", "放量", "超卖"]
   cn_pool: []
-  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300；留空时按板块分层随机抽样，每天换一批
+  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300
   us_pool: ["AAPL", "MSFT", "TSLA"]
   hk_pool: ["00700", "09988"]
-
-# 收盘漏斗选股（自研四层，交易日 15:10 后自动跑一次全市场，替代随机抽样扫描）
-funnel:
-  enabled: true
-  top_n: 10                 # 每天输出的关注池数量
-  min_amount: 50000000      # L1 日成交额下限（元）
-  min_market_cap: 50        # L2 总市值下限（亿元）
-  pe_min: 0                 # L2 PE 区间（0 < PE < 100）
-  pe_max: 100
-  min_turnover: 0.3         # L2 换手率下限（%）
-  l3_limit: 80              # L3 技术面后进入 L4 的候选数
-  l3_conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"]
-  # L4 新闻风险层：近7天新闻/公告标题命中关键词则降分并标注（如 000056 的诉讼公告）
-  news_enabled: true
-  news_days: 7
-  news_penalty: 15
-  news_risk_keywords: ["诉讼", "立案", "减持", "质押", "冻结", "处罚", "违规", "问询",
-                       "风险警示", "退市", "终止上市", "调查", "仲裁", "合同纠纷",
-                       "业绩预亏", "商誉减值", "监管函", "关注函"]
 
 # 交易监听：从 macOS 通知中心识别券商成交消息，自动同步持仓
 # 使用前提：1) 系统设置→隐私与安全性→完全磁盘访问 给终端/IDE授权
@@ -95,3 +75,13 @@ ai:
   timeout: 60
   max_tokens: 1200
   temperature: 0.3
+
+# 本地 Vibe-Trading 二次分析（发邮件时可选；需本机 serve）
+vibe:
+  enabled: false
+  on_email: true
+  candidate_count: 15     # 每次给 Vibe 的扫描候选数量（结果落盘 results/latest_scan.json）
+  base_url: "http://127.0.0.1:8899"
+  auth_key: ""
+  max_wait_sec: 120
+  poll_sec: 3

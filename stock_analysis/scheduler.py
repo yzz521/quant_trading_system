@@ -24,6 +24,8 @@ from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
 from .ai_summary import generate_market_summary
+from .vibe_bridge import build_payload, save_latest_scan, submit_secondary_analysis
+from .vibe_format import build_display_summary
 from .holdings import Holdings
 from .buy_power import annotate_list
 from .holdings_action import analyze_holding_actions
@@ -42,7 +44,6 @@ class MarketScheduler:
         self.cfg = load_yaml(config_path) or {}
         self.stock_pools = self.cfg.get("stock_pools", {})
         self.scan_cfg = self.cfg.get("scan", {})
-        self.funnel_cfg = self.cfg.get("funnel", {}) or {}
         sched = self.cfg.get("schedule", {})
         self.cn_interval = int(sched.get("cn_interval_min", 60)) * 60
         self.ushk_interval = int(sched.get("ushk_interval_min", 10)) * 60
@@ -93,7 +94,7 @@ class MarketScheduler:
         return {m: self._in_session(m, now) for m in ("CN", "HK", "US")}
 
     # ------------------------------------------------------------------ #
-    def _run_market(self, market: str, funnel: Optional[dict] = None) -> None:
+    def _run_market(self, market: str) -> None:
         pool = self.stock_pools.get(market, [])
         if not pool:
             log.info("[%s] 股票池为空，跳过", market)
@@ -109,7 +110,7 @@ class MarketScheduler:
                 log.warning("诊断 %s 失败: %s", code, e)
 
         scan_hits = None
-        if funnel is None and self.scan_cfg.get("enabled", False):
+        if self.scan_cfg.get("enabled", False):
             try:
                 scanner = StockScanner()
                 conds = self.scan_cfg.get("conditions", ["多头排列"])
@@ -118,13 +119,15 @@ class MarketScheduler:
                     log.info("[%s] 扫描 %d 只标的 ...", market, len(universe))
                     hits = scanner.scan(universe, conds, limit=50)
                     scan_hits = [h.to_dict() for h in hits]
-                    # 盘中扫描同样剔除 ST/退市（与收盘漏斗 L1 一致）
-                    scan_hits = [
-                        h for h in scan_hits
-                        if not any(k in str(h.get("name") or "") for k in ("ST", "退"))
-                    ]
             except Exception as e:  # noqa: BLE001
                 log.error("[%s] 扫描失败: %s", market, e)
+
+        # 落盘最新扫描命中（供 Vibe 页面/CLI 复用；只保留一份）
+        try:
+            vibe_n = int(((self.cfg or {}).get("vibe") or {}).get("candidate_count") or 15)
+            save_latest_scan(Path(__file__).resolve().parents[1], scan_hits or [], market, limit=vibe_n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] 扫描结果落盘失败: %s", market, e)
 
         # 该市场持仓盈亏 + 卖出/加仓动作建议
         holdings, h_summary = [], None
@@ -186,6 +189,48 @@ class MarketScheduler:
             log.warning("[%s] AI 点评跳过: %s", market, e)
             ai_summary = None
 
+        # Vibe 二次分析（可选；超时/失败不阻断邮件）
+        vibe_summary = None
+        vibe_cfg = (self.cfg or {}).get("vibe") or {}
+        if vibe_cfg.get("enabled") and vibe_cfg.get("on_email", True):
+            try:
+                from pathlib import Path as _P
+                root = _P(__file__).resolve().parents[1]
+                vibe_n = int(vibe_cfg.get("candidate_count") or 15)
+                payload = build_payload(
+                    holdings=holdings or [],
+                    holding_actions=holding_actions,
+                    capital_snapshot=capital_snapshot,
+                    candidates=(scan_hits or [])[: vibe_n],
+                    market=market,
+                )
+                base = str(vibe_cfg.get("base_url") or "http://127.0.0.1:8899")
+                auth = str(vibe_cfg.get("auth_key") or "")
+                wait = float(vibe_cfg.get("max_wait_sec") or 120)
+                vres = submit_secondary_analysis(
+                    payload,
+                    root=root,
+                    base_url=base,
+                    auth_key=auth,
+                    max_wait_sec=wait,
+                    poll_sec=float(vibe_cfg.get("poll_sec") or 3),
+                )
+                if vres.get("clean_summary"):
+                    vibe_summary = vres["clean_summary"]
+                elif vres.get("summary"):
+                    disp = build_display_summary(vres.get("summary") or "")
+                    vibe_summary = disp.get("clean_summary") or (vres.get("summary") or "")[:2000]
+                if vres.get("partial") and vibe_summary:
+                    vibe_summary = "（Vibe 过程稿摘要）\n" + vibe_summary
+                if not vibe_summary and vres.get("error"):
+                    log.warning("[%s] Vibe 无正文: %s", market, vres.get("error"))
+                else:
+                    log.info("[%s] Vibe 二次分析 ok=%s partial=%s", market, vres.get("ok"), vres.get("partial"))
+            except Exception as e:  # noqa: BLE001
+                log.warning("[%s] Vibe 跳过: %s", market, e)
+                vibe_summary = None
+
+
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
@@ -193,27 +238,10 @@ class MarketScheduler:
             holding_actions=holding_actions,
             capital_snapshot=capital_snapshot,
             ai_summary=ai_summary,
-            funnel=funnel,
+            vibe_summary=vibe_summary,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
-
-    # ------------------------------------------------------------------ #
-    def _run_funnel_cycle(self) -> None:
-        """收盘后跑一次全市场四层漏斗并推送（仅 CN）。"""
-        from .funnel import FunnelScanner
-
-        log.info("[CN] 收盘漏斗开始 ...")
-        funnel = FunnelScanner(self.funnel_cfg).run(holdings_mgr=self.holdings)
-        if not funnel.get("hits"):
-            log.warning("[CN] 收盘漏斗无命中，不推送")
-            return
-        # 复用完整邮件流程：持仓/资金/AI点评/自选股诊断 保留，扫描块由漏斗替换
-        self._run_market("CN", funnel=funnel)
-
-    def run_funnel_once(self) -> None:
-        """立即执行一次收盘漏斗（供 --once-daily 与冒烟测试使用）。"""
-        self._run_funnel_cycle()
 
     # ------------------------------------------------------------------ #
     def _scan_universe(self, market: str, scanner: StockScanner) -> list[str]:
@@ -256,7 +284,6 @@ class MarketScheduler:
         log.info("调度器启动 | A股每%ds / 美股港股每%ds",
                  self.cn_interval, self.ushk_interval)
         last = {"CN": 0.0, "HK": 0.0, "US": 0.0}
-        last_funnel = None
         try:
             while True:
                 now_ts = time.time()
@@ -271,16 +298,6 @@ class MarketScheduler:
                         except Exception as e:  # noqa: BLE001
                             log.error("[%s] 执行失败: %s", m, e)
                         last[m] = now_ts
-                # 收盘漏斗：交易日 15:10-16:00 窗口，一天一次
-                if self.funnel_cfg.get("enabled", False) and now.weekday() < 5:
-                    today = now.date()
-                    hm = now.hour * 60 + now.minute
-                    if last_funnel != today and 15 * 60 + 10 <= hm < 16 * 60:
-                        try:
-                            self._run_funnel_cycle()
-                        except Exception as e:  # noqa: BLE001
-                            log.error("[CN] 收盘漏斗失败: %s", e)
-                        last_funnel = today
                 status = {m: ("开" if self._in_session(m, now) else "休")
                           for m in self.enabled_markets}
                 log.info("状态 %s", status)

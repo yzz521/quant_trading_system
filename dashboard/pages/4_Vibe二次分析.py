@@ -24,6 +24,7 @@ from quant_trading_system.stock_analysis.vibe_bridge import (
     build_payload,
     health,
     list_results,
+    load_latest_scan,
     load_result,
     submit_secondary_analysis,
     DEFAULT_BASE,
@@ -32,7 +33,11 @@ from quant_trading_system.stock_analysis.vibe_format import build_display_summar
 
 ROOT = Path(__file__).resolve().parents[2]
 
-st.caption("以 GP助手为事实源。Vibe：`vibe-trading serve --port 8899`。过程稿会自动抽成摘要卡片。")
+st.caption(
+    "以 GP助手为事实源。Vibe：`vibe-trading serve --port 8899`"
+    "（[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)）。"
+    "过程稿会自动抽成摘要卡片。"
+)
 
 col_a, col_b = st.columns([2, 1])
 with col_b:
@@ -47,6 +52,22 @@ with col_b:
 with col_a:
     st.markdown("##### 发起二次分析")
     run = st.button("发送到 Vibe", type="primary")
+
+# 扫描候选（来自调度器每小时落盘的 results/latest_scan.json）
+latest_scan = load_latest_scan(ROOT)
+candidates = (latest_scan.get("hits") or [])[:15]
+cand_col, btn_col = st.columns([4, 1])
+with cand_col:
+    if candidates:
+        st.caption(
+            f"📋 已载入扫描候选 {len(candidates)} 只"
+            f"（as_of {latest_scan.get('as_of', '')} · {latest_scan.get('market', '')}）"
+        )
+    else:
+        st.caption("📋 暂无扫描候选：等待调度器生成 results/latest_scan.json（每小时扫描后自动落盘）")
+with btn_col:
+    if st.button("重新读取候选", key="reload_scan"):
+        st.rerun()
 
 holder = Holdings(str(ROOT / "config" / "holdings.yaml"))
 positions = holder.all()
@@ -63,7 +84,7 @@ payload = build_payload(
     holdings=positions,
     holding_actions=actions,
     capital_snapshot=capital,
-    candidates=[],
+    candidates=candidates,
     market="CN",
 )
 with st.expander("预览投喂 JSON", expanded=False):

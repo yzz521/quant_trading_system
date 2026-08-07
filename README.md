@@ -229,6 +229,26 @@ python deploy/ctl.py start-all --with-scheduler
 
 ---
 
+## 与 Vibe-Trading 二次分析联动
+
+本系统可以把 **持仓 + 扫描命中候选股** 投喂给本地 [Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)
+（HKU 开源的个人交易 Agent）做二次分析，结果回填到邮件与看板。
+
+```bash
+# 终端1：启动 Vibe（首次需 pip install vibe-trading-ai 并 vibe-trading init）
+vibe-trading serve --port 8899
+
+# 终端2：看板「Vibe 二次分析」页手动发起；或配置后随邮件自动执行
+python deploy/ctl.py start-all
+```
+
+- 载荷内容：`holdings`（持仓）+ `candidates`（扫描命中 Top 15，调度器每小时落盘
+  `results/latest_scan.json`，页面/CLI/邮件统一读取）。
+- 配置：`config/notify.yaml` 的 `vibe:` 段（`enabled` / `on_email` / `candidate_count`）。
+- 详细说明见 [docs/VIBE_BRIDGE.md](docs/VIBE_BRIDGE.md)、[docs/VIBE_ON_EMAIL.md](docs/VIBE_ON_EMAIL.md)。
+
+---
+
 ## 配置与安全
 
 | 文件 | 说明 |
