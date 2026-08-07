@@ -37,7 +37,38 @@ IS_WIN = sys.platform.startswith("win")
 
 
 def _python() -> str:
-    return os.environ.get("PYTHON_BIN") or sys.executable
+    env = os.environ.get("PYTHON_BIN")
+    if env:
+        return env
+    try:
+        import streamlit  # noqa: F401
+        return sys.executable
+    except Exception:  # noqa: BLE001
+        pass
+    # 当前解释器缺 streamlit（看板必需）时，探测已安装 streamlit 的解释器
+    candidates = [
+        str(ROOT / ".venv" / "bin" / "python"),
+        str(ROOT / ".venv" / "bin" / "python3"),
+        "/opt/anaconda3/bin/python3",
+        "/Users/yzz/.workbuddy/binaries/python/envs/default/bin/python",
+        "/usr/local/bin/python3",
+        "/opt/homebrew/bin/python3",
+    ]
+    for c in candidates:
+        if not os.path.exists(c):
+            continue
+        try:
+            r = subprocess.run(
+                [c, "-c", "import streamlit"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if r.returncode == 0:
+                return c
+        except Exception:  # noqa: BLE001
+            continue
+    return sys.executable
 
 
 def _ports() -> dict[str, int]:
