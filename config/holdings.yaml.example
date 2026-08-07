@@ -1,9 +1,0 @@
-# 持仓模板 — 复制为 holdings.yaml 或通过 Dashboard / SQLite 管理
-# 注意：真实持仓与凭证请勿提交到 Git
-holdings:
-  - code: "600000"
-    name: 示例股票
-    market: CN
-    cost_price: 10.0
-    quantity: 100
-    buy_date: "2024-01-01"

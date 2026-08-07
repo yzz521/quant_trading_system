@@ -1,0 +1,100 @@
+name: release-portable
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # Windows x64
+            artifact: quant_trading_system-portable-windows-x64.zip
+            script: start.bat
+          - os: macos-latest     # ARM64（Apple Silicon / M 系列）
+            artifact: quant_trading_system-portable-macos-arm64.zip
+            script: start.command
+          - os: macos-26-intel   # x86_64（Intel，macos-13 已退役）
+            artifact: quant_trading_system-portable-macos-x64.zip
+            script: start.command
+          - os: ubuntu-latest    # Linux x64
+            artifact: quant_trading_system-portable-linux-x64.zip
+            script: start.sh
+    runs-on: ${{ matrix.os }}
+    env:
+      # 只用 uv 托管的解释器，避免 `uv python find` 命中系统 Python 导致复制错误目录
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Assemble portable bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          B=dist/quant_trading_system-portable
+          mkdir -p "$B/quant_trading_system"
+          # 只打包 git 跟踪文件（排除 .git/.venv/results 等）
+          git archive HEAD | tar -x -C "$B/quant_trading_system"
+
+          # 显式安装并定位 uv 托管的解释器（setup-uv 的 python-version 只设置
+          # UV_PYTHON，不保证已安装；only-managed 保证布局是标准的：
+          # macOS/Linux 为 <root>/bin/python3.12，Windows 为 <root>/python.exe）
+          uv python install 3.12
+          PY="$(uv python find 3.12)"
+          echo "uv python: $PY"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PY="$(cygpath -u "$PY")"
+          fi
+          BIN_DIR="$(dirname "$PY")"
+          PY_NAME="$(basename "$PY")"
+          if [ "$(basename "$BIN_DIR")" = "bin" ]; then
+            PRT="$(dirname "$BIN_DIR")"
+          else
+            PRT="$BIN_DIR"
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PY_BIN="$B/runtime/$PY_NAME"
+          else
+            PY_BIN="$B/runtime/bin/$PY_NAME"
+          fi
+          cp -R "$PRT" "$B/runtime"
+          # 统一提供 runtime/bin/python3 入口（uv 各版本 bin 软链命名不一，缺则补软链）
+          if [ "$RUNNER_OS" != "Windows" ] && [ ! -e "$B/runtime/bin/python3" ]; then
+            ln -s "$PY_NAME" "$B/runtime/bin/python3"
+          fi
+          # 便携包副本可安全修改：去掉 PEP668 标记后用自带 pip 安装依赖
+          rm -f "$B/runtime/lib/python3.12/EXTERNALLY-MANAGED"
+          "$PY_BIN" -m pip install -q -r packaging/requirements-release.txt
+
+          # 便携包默认关闭登录门禁（不携带任何个人密码）
+          printf 'enabled: false\nusers: []\n' > "$B/quant_trading_system/config/users.yaml"
+          cp "packaging/${{ matrix.script }}" "$B/"
+          cp packaging/运行说明.txt "$B/README.txt"
+          chmod +x "$B/start.command" "$B/start.sh" 2>/dev/null || true
+
+      - name: Zip bundle
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path quant_trading_system-portable -DestinationPath ${{ matrix.artifact }}"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -c -k --sequesterRsrc quant_trading_system-portable "${{ matrix.artifact }}"
+          else
+            zip -qr "${{ matrix.artifact }}" quant_trading_system-portable
+          fi
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}

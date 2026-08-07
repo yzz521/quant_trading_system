@@ -249,6 +249,28 @@ python deploy/ctl.py start-all
 
 ---
 
+## 一键发布便携包（Release）
+
+打一个 `v*` tag 即可由 GitHub Actions 自动构建 4 个平台的便携包并挂到
+Release（内含独立 Python 运行时 + 全部依赖 + 一键启动脚本，解压即用）：
+
+| 包 | 适用平台 | runner |
+|----|---------|--------|
+| `quant_trading_system-portable-windows-x64.zip` | Windows 10/11 x64 | `windows-latest` |
+| `quant_trading_system-portable-macos-arm64.zip` | macOS Apple Silicon（M 系列） | `macos-latest` |
+| `quant_trading_system-portable-macos-x64.zip` | macOS Intel | `macos-26-intel` |
+| `quant_trading_system-portable-linux-x64.zip` | Linux x64 | `ubuntu-latest` |
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+构建配置见 `.github/workflows/release.yml`，启动脚本与依赖清单在 `packaging/`。
+便携包默认关闭登录门禁、持仓为空；数据与配置均在本机，不入包。
+
+---
+
 ## 配置与安全
 
 | 文件 | 说明 |
