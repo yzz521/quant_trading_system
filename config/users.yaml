@@ -6,6 +6,13 @@
 
 enabled: true
 
+# 会话保持多久（小时），刷新页面仍有效
+session_ttl_hours: 168        # 默认 7 天；可改 24 / 72 / 336 等
+
+# 会话签名密钥：真实值请放 config/secret.local.yaml（已 gitignore）或环境变量 QTS_SESSION_SECRET
+# 此文件已提交公开仓库，切勿放真实密钥
+session_secret: ""
+
 users:
   - username: admin
     # 对应明文 changeme —— 启用后请立刻改密码并只保留 password_hash
