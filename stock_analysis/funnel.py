@@ -42,7 +42,9 @@ DEFAULTS = {
     "l3_conditions": ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"],
     "l3_workers": 5,               # L3 并发数（腾讯K线限流敏感，不宜太高）
     "main_net_bonus": 10,          # L4 主力净流入为正时的加分
+    "l2_fallback_spot": True,      # 腾讯行情失败时用新浪快照做 L2 过滤
     "news_enabled": True,          # L4 新闻风险层开关
+    "news_sources": ["eastmoney", "xueqiu", "sina"],  # 多源顺序；单源失败自动跳过
     "news_days": 7,                # 只看近 N 天新闻/公告
     "news_limit": 20,
     "news_penalty": 15,            # 命中风险关键词的降分
@@ -52,6 +54,16 @@ DEFAULTS = {
         "业绩预亏", "商誉减值", "监管函", "关注函",
     ],
 }
+
+
+def _spot_l2_frame(spot: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """从新浪快照取 L2 需要的列；缺字段返回 None（回退不可用）。"""
+    if spot is None:
+        return None
+    cols = ["code", "name", "close", "pct_chg", "total_cap_yi", "pe", "turnover"]
+    if any(c not in spot.columns for c in cols):
+        return None
+    return spot[cols].copy()
 
 
 @dataclass
@@ -268,8 +280,15 @@ class FunnelScanner:
 
         results: dict[str, list[dict]] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            sources = self.cfg.get("news_sources")
+
+            def _fetch(code: str) -> list[dict]:
+                if fetcher is fetch_stock_news and sources:
+                    return fetcher(code, days=days, limit=limit, sources=sources)
+                return fetcher(code, days=days, limit=limit)
+
             futs = {
-                ex.submit(fetcher, it["code"], days=days, limit=limit): it["code"]
+                ex.submit(_fetch, it["code"]): it["code"]
                 for it in items
             }
             for fut in as_completed(futs):
@@ -305,7 +324,7 @@ class FunnelScanner:
         stages.append(FunnelStage("L1 硬过滤", total, len(l1)))
         if not l1:
             log.warning("漏斗 L1 无候选，终止")
-            return FunnelResult(stages=stages, total=total).to_dict()
+            return FunnelResult(stages=stages, total=total, elapsed=time.time() - t0).to_dict()
         if self.cfg.get("l1_limit"):
             # 抽样取有代表性的候选（固定种子），避免只取到列表头部的同类股票
             import random
@@ -313,11 +332,16 @@ class FunnelScanner:
 
         quotes = fetch_tencent_quotes(l1)
         qdf = self.stage_l2(quotes)
+        if (qdf is None or qdf.empty) and self.cfg.get("l2_fallback_spot", True):
+            spot_l2 = _spot_l2_frame(spot)
+            if spot_l2 is not None and not spot_l2.empty:
+                log.warning("腾讯批量行情不可用，回退新浪快照做 L2 过滤")
+                qdf = self.stage_l2(spot_l2)
         l2_codes: list[str] = [] if qdf is None else qdf["code"].astype(str).tolist()
         stages.append(FunnelStage("L2 质量过滤", len(l1), len(l2_codes)))
         if not l2_codes:
             log.warning("漏斗 L2 无候选，终止")
-            return FunnelResult(stages=stages, total=total).to_dict()
+            return FunnelResult(stages=stages, total=total, elapsed=time.time() - t0).to_dict()
         quote_map = {
             str(r["code"]).zfill(6): r.to_dict()
             for _, r in qdf.iterrows()
@@ -331,7 +355,7 @@ class FunnelScanner:
         stages.append(FunnelStage("L3 技术面", len(l2_codes), len(tech)))
         if not tech:
             log.warning("漏斗 L3 无命中，终止")
-            return FunnelResult(stages=stages, total=total).to_dict()
+            return FunnelResult(stages=stages, total=total, elapsed=time.time() - t0).to_dict()
 
         held: set = set()
         if holdings_mgr is not None:

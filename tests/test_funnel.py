@@ -15,6 +15,50 @@ def _scanner(**overrides) -> FunnelScanner:
     return FunnelScanner(cfg)
 
 
+def test_spot_snapshot_has_l2_columns(monkeypatch):
+    import akshare
+
+    raw = pd.DataFrame([{
+        "代码": "600001", "名称": "x", "最新价": 10.0, "涨跌幅": 1.0,
+        "成交量": 1000, "成交额": 1e8, "总市值": 1e10, "流通市值": 8e9,
+        "市盈率-动态": 20.0, "换手率": 1.5, "市净率": 2.0,
+    }])
+    monkeypatch.setattr(akshare, "stock_zh_a_spot", lambda: raw)
+    out = funnel_mod.fetch_spot_snapshot()
+    assert out.loc[0, "total_cap_yi"] == 100.0
+    assert out.loc[0, "float_cap_yi"] == 80.0
+    assert out.loc[0, "pe"] == 20.0
+    assert out.loc[0, "turnover"] == 1.5
+
+
+def test_run_l2_fallback_spot_when_tencent_down(monkeypatch):
+    spot = pd.DataFrame([{
+        "code": "600001", "name": "x", "close": 10.0, "pct_chg": 1.0,
+        "volume": 1e7, "amount": 8e7,
+        "total_cap_yi": 100.0, "pe": 20.0, "turnover": 1.0,
+    }])
+    monkeypatch.setattr(funnel_mod, "fetch_spot_snapshot", lambda: spot)
+    monkeypatch.setattr(funnel_mod, "fetch_tencent_quotes", lambda codes, batch=50: None)
+
+    def fake_tech(self, codes, name_map=None):
+        return [{
+            "code": c, "name": (name_map or {}).get(c), "market": "CN",
+            "close": 10.0, "score": 50,
+        } for c in codes]
+
+    def fake_l4(self, tech, quote_map, holdings_mgr, held):
+        return tech
+
+    monkeypatch.setattr(FunnelScanner, "_technical_pass", fake_tech)
+    monkeypatch.setattr(FunnelScanner, "stage_l4", fake_l4)
+
+    out = _scanner().run()
+    l2 = out["stages"][1]
+    assert l2["after"] == 1  # 腾讯挂掉时用新浪快照保住 L2
+    assert out["hits"][0]["code"] == "600001"
+    assert out["elapsed"] >= 0
+
+
 def test_stage_l1_filters_st_zero_amount():
     f = _scanner(min_amount=50_000_000)
     df = pd.DataFrame([

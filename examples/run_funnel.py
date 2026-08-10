@@ -8,6 +8,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from quant_trading_system.stock_analysis.funnel import FunnelScanner
 from quant_trading_system.utils import load_yaml
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="收盘漏斗冒烟")
     parser.add_argument("--config", default="config/notify.yaml")
     parser.add_argument("--limit", type=int, default=0,
@@ -41,6 +42,13 @@ def main() -> None:
             f"换手{h.get('turnover')}% 主力净流入{h.get('main_net')} | "
             f"{'/'.join(h.get('matched') or [])}"
         )
+    # 落盘供周报等下游使用
+    out_dir = Path(__file__).resolve().parents[1] / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "latest_funnel.json"
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n结果已落盘: {path}")
+    return 0
 
 
 if __name__ == "__main__":

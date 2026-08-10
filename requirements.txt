@@ -19,6 +19,7 @@ scikit-learn>=1.3
 
 # Dashboard (optional)
 streamlit>=1.28
+weasyprint>=60.0         # 周报 PDF 渲染（需系统 pango，macOS: brew install pango）
 
 # Live brokers (install only when going live)
 # python-binance       # 加密货币实盘
