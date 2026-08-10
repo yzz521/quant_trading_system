@@ -4,12 +4,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Vibe 按 prompt 输出的固定小节标题（中文序号）
+# Vibe 按 prompt 输出的小节标题，兼容 ①②③④ 与 一、二、三、四 两种序号写法
 _HEADINGS = {
-    "overview": (r"①\s*一段总括",),
-    "detail": (r"②\s*按标的分条",),
-    "discipline": (r"[三3]\s*条纪律提醒",),
-    "disclaimer": (r"④\s*免责声明",),
+    "overview": (r"①\s*一段总括", r"[一二1]\s*[、.．)）]?\s*总括", r"\*\*总括\*\*"),
+    "detail": (r"②\s*按标的分条", r"[二2]\s*[、.．)）]?\s*按标的分条", r"按标的分条"),
+    "discipline": (r"[三3]\s*条纪律提醒", r"[三3]\s*[、.．)）]?\s*(?:条)?纪律提醒"),
+    "disclaimer": (r"④\s*免责声明", r"[四4]\s*[、.．)）]?\s*免责声明"),
 }
 
 

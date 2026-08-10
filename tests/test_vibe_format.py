@@ -85,3 +85,18 @@ def test_raw_fallback_when_structure_unparsable():
 def test_process_draft_detected():
     assert is_process_draft("## Goal\n...\n## Progress\n尚未输出终稿")
     assert not is_process_draft(FIXTURE)
+
+
+def test_alt_heading_variant():
+    text = (
+        "## 一、总括\n\n组合高仓位高集中，第一要务是降金融集中度。\n\n"
+        "## 二、按标的分条\n\n**招商银行**\n- 风险：集中度超标，招行一票占比近四成。\n\n"
+        "## 三、纪律提醒\n\n1. 满仓即无选择权。\n\n"
+        "## 四、免责声明\n\n非投资建议。"
+    )
+    d = build_display_summary(text)
+    assert d["fallback_raw"] is False
+    assert d["overview"].startswith("组合高仓位高集中")
+    assert len(d["disciplines"]) == 1
+    assert d["disciplines"][0].startswith("满仓即无选择权")
+    assert d["risks"] == ["集中度超标，招行一票占比近四成。"]
