@@ -83,5 +83,10 @@ vibe:
   candidate_count: 15     # 每次给 Vibe 的扫描候选数量（结果落盘 results/latest_scan.json）
   base_url: "http://127.0.0.1:8899"
   auth_key: ""
-  max_wait_sec: 120
+  max_wait_sec: 360       # Vibe 生成常需 3-5 分钟，120 秒经常等不到
   poll_sec: 3
+  # Vibe 失败/超时后，用 AI 点评的 DeepSeek（OpenAI 兼容）兜底生成二次分析
+  fallback_llm: true
+  fallback_model: ""          # 留空使用 ai.model
+  fallback_max_tokens: 3000
+  fallback_timeout: 180

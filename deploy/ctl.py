@@ -88,11 +88,6 @@ SERVICES = {
         "script": "examples/run_scheduler.py",
         "port_key": None,
     },
-    "tunnel": {
-        "desc": "Cloudflare 快速隧道（cloudflared → 本地看板）",
-        "port_key": "dashboard",
-        "cloudflared": True,
-    },
 }
 
 DEFAULT_ALL = ["dashboard"]  # 仅一个 Web 端口；调度器需 --with-scheduler  # scheduler 需 notify 配置，默认不自动起
@@ -149,12 +144,7 @@ def _start_one(name: str) -> None:
     parent = str(ROOT.parent)
     env["PYTHONPATH"] = parent + os.pathsep + env.get("PYTHONPATH", "")
 
-    if meta.get("cloudflared"):
-        port = ports[meta["port_key"]]
-        cf = os.environ.get("CLOUDFLARED_BIN", "cloudflared")
-        cmd = [cf, "tunnel", "--url", f"http://127.0.0.1:{port}"]
-        url_hint = f"cloudflared → http://127.0.0.1:{port}（公网 URL 见日志）"
-    elif "module" in meta:
+    if "module" in meta:
         port = ports[meta["port_key"]]
         cmd = [
             py, "-m", "streamlit", "run", str(ROOT / meta["module"]),
@@ -189,9 +179,6 @@ def _start_one(name: str) -> None:
         if url_hint:
             print(f"   浏览器: {url_hint}")
         print(f"   日志: {logf}")
-        if meta.get("cloudflared"):
-            print("   提示: 在日志中搜索 trycloudflare.com 获取公网地址")
-            print(f"   例如: grep -oE 'https://[a-zA-Z0-9.-]+.trycloudflare.com' {logf} | tail -1")
     else:
         print(f"❌ {name} 启动可能失败，请查看 {logf}")
 
@@ -236,12 +223,10 @@ def _status_one(name: str) -> None:
         print(f"❌ {name:12} 未运行  {desc}")
 
 
-def cmd_start_all(include_scheduler: bool = False, include_tunnel: bool = False) -> None:
+def cmd_start_all(include_scheduler: bool = False) -> None:
     names = list(DEFAULT_ALL)
     if include_scheduler:
         names.append("scheduler")
-    if include_tunnel:
-        names.append("tunnel")
     print("启动服务:", ", ".join(names))
     for n in names:
         _start_one(n)
@@ -259,10 +244,10 @@ def cmd_status() -> None:
         _status_one(n)
 
 
-def cmd_restart_all(include_scheduler: bool = False, include_tunnel: bool = False) -> None:
+def cmd_restart_all(include_scheduler: bool = False) -> None:
     cmd_stop_all()
     time.sleep(1)
-    cmd_start_all(include_scheduler=include_scheduler, include_tunnel=include_tunnel)
+    cmd_start_all(include_scheduler=include_scheduler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -276,8 +261,6 @@ def main(argv: list[str] | None = None) -> int:
   python deploy/ctl.py status
   python deploy/ctl.py dashboard start
   python deploy/ctl.py holdings log
-  python deploy/ctl.py tunnel start   # 后台 cloudflared
-  python deploy/ctl.py start-all --with-tunnel
 """,
     )
     parser.add_argument(
@@ -297,24 +280,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="start-all 时同时启动调度器",
     )
-    parser.add_argument(
-        "--with-tunnel",
-        action="store_true",
-        help="start-all 时同时后台启动 cloudflared 隧道",
-    )
     args = parser.parse_args(argv)
 
     svc = args.service.lower().replace("_", "-")
     act = args.action.lower()
 
     if svc in ("start-all", "startall", "all"):
-        cmd_start_all(include_scheduler=args.with_scheduler, include_tunnel=args.with_tunnel)
+        cmd_start_all(include_scheduler=args.with_scheduler)
         return 0
     if svc in ("stop-all", "stopall"):
         cmd_stop_all()
         return 0
     if svc in ("restart-all", "restartall"):
-        cmd_restart_all(include_scheduler=args.with_scheduler, include_tunnel=args.with_tunnel)
+        cmd_restart_all(include_scheduler=args.with_scheduler)
         return 0
     if svc in ("status", "status-all"):
         cmd_status()
