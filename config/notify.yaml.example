@@ -20,6 +20,26 @@ scan:
   us_pool: ["AAPL", "MSFT", "TSLA"]
   hk_pool: ["00700", "09988"]
 
+# 收盘漏斗（全市场四层过滤 → Top N 关注池）
+funnel:
+  enabled: true
+  top_n: 10                 # 每天输出的关注池数量
+  min_amount: 50000000      # L1 日成交额下限（元）
+  min_market_cap: 50        # L2 总市值下限（亿元）
+  pe_min: 0                 # L2 PE 区间（0 < PE < 100）
+  pe_max: 100
+  min_turnover: 0.3         # L2 换手率下限（%）
+  l3_limit: 80              # L3 技术面后进入 L4 的候选数
+  l3_conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"]
+  # L4 新闻风险层：近7天新闻/公告标题命中关键词则降分并标注（如 000056 的诉讼公告）
+  news_enabled: true
+  news_sources: ["eastmoney", "xueqiu", "sina"]   # 多源顺序；单源失败自动跳过，新浪兜底
+  news_days: 7
+  news_penalty: 15
+  news_risk_keywords: ["诉讼", "立案", "减持", "质押", "冻结", "处罚", "违规", "问询",
+                       "风险警示", "退市", "终止上市", "调查", "仲裁", "合同纠纷",
+                       "业绩预亏", "商誉减值", "监管函", "关注函"]
+
 # 交易监听：从 macOS 通知中心识别券商成交消息，自动同步持仓
 # 使用前提：1) 系统设置→隐私与安全性→完全磁盘访问 给终端/IDE授权
 #           2) 微信 Mac 保持登录在线；3) 同花顺/平安证券服务号开启交易提醒
@@ -63,6 +83,15 @@ schedule:
   ushk_interval_min: 10      # 美股/港股：每 10 分钟
   us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
   poll_interval_sec: 60      # 调度器主循环检查间隔
+  # 每日收盘漏斗：交易日 15:10 后跑一次全市场四层过滤，Top10 落盘并推送邮件
+  daily_funnel:
+    enabled: true
+    time: "15:10"
+  # 每周五 15:30 自动生成 A股周报（PDF 邮件附件 + 本地存档 results/weekly/）
+  weekly_report:
+    enabled: true
+    day: "fri"
+    time: "15:30"
 
 
 # AI 点评（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI

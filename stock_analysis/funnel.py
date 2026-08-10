@@ -43,6 +43,7 @@ DEFAULTS = {
     "l3_workers": 5,               # L3 并发数（腾讯K线限流敏感，不宜太高）
     "main_net_bonus": 10,          # L4 主力净流入为正时的加分
     "news_enabled": True,          # L4 新闻风险层开关
+    "news_sources": ["eastmoney", "xueqiu", "sina"],  # 多源顺序；单源失败自动跳过
     "news_days": 7,                # 只看近 N 天新闻/公告
     "news_limit": 20,
     "news_penalty": 15,            # 命中风险关键词的降分
@@ -268,8 +269,15 @@ class FunnelScanner:
 
         results: dict[str, list[dict]] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            sources = self.cfg.get("news_sources")
+
+            def _fetch(code: str) -> list[dict]:
+                if fetcher is fetch_stock_news and sources:
+                    return fetcher(code, days=days, limit=limit, sources=sources)
+                return fetcher(code, days=days, limit=limit)
+
             futs = {
-                ex.submit(fetcher, it["code"], days=days, limit=limit): it["code"]
+                ex.submit(_fetch, it["code"]): it["code"]
                 for it in items
             }
             for fut in as_completed(futs):

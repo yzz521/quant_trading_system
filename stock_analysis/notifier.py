@@ -14,6 +14,8 @@ import smtplib
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from email.encoders import encode_base64
 from typing import Optional
 
 import requests
@@ -53,7 +55,14 @@ class Notifier:
         log.info("通知渠道已启用: %s", self.channels or "无")
 
     # ------------------------------------------------------------------ #
-    def send(self, title: str, text: str, html: Optional[str] = None) -> dict:
+    def send(
+        self,
+        title: str,
+        text: str,
+        html: Optional[str] = None,
+        attachments: Optional[list[tuple[str, bytes]]] = None,
+    ) -> dict:
+        """attachments: [(filename, bytes)]，仅 email 渠道会附带。"""
         if not self.channels:
             log.info("无启用渠道，仅打印：\n%s\n%s", title, text)
             return {"_print": True}
@@ -61,7 +70,7 @@ class Notifier:
         for ch in self.channels:
             try:
                 if ch == "email":
-                    self._send_email(title, text, html or text)
+                    self._send_email(title, text, html or text, attachments or [])
                 elif ch == "serverchan":
                     self._send_serverchan(title, text)
                 elif ch == "feishu":
@@ -74,14 +83,26 @@ class Notifier:
         return results
 
     # ------------------------------------------------------------------ #
-    def _send_email(self, title: str, text: str, html: str) -> None:
+    def _send_email(
+        self,
+        title: str,
+        text: str,
+        html: str,
+        attachments: Optional[list[tuple[str, bytes]]] = None,
+    ) -> None:
         c = self._notify_cfg["email"]
-        msg = MIMEMultipart("alternative")
+        msg = MIMEMultipart()
         msg["Subject"] = title
         msg["From"] = f"{c.get('sender_name', 'GP助手')} <{c['username']}>"
         msg["To"] = ", ".join(c["to"])
-        msg.attach(MIMEText(text, "plain", "utf-8"))
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(text, "plain", "utf-8"))
+        alt.attach(MIMEText(html, "html", "utf-8"))
+        msg.attach(alt)
+        for fname, payload in (attachments or []):
+            part = MIMEApplication(payload, _subtype="pdf", _encoder=encode_base64)
+            part.add_header("Content-Disposition", "attachment", filename=fname)
+            msg.attach(part)
         if c.get("use_ssl", True):
             server = smtplib.SMTP_SSL(c["smtp_host"], int(c["smtp_port"]), timeout=30)
         else:
@@ -424,4 +445,3 @@ def _scan_html_annotated(hits: list) -> str:
         "<th>评分</th><th>命中</th><th>可买性</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
-

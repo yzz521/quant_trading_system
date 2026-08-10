@@ -371,35 +371,135 @@ def fetch_kline_sina_api(info: MarketInfo, days: int = 120) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def fetch_stock_news(code: str, days: int = 7, limit: int = 20) -> list[dict]:
-    """新浪个股新闻/公告（JSON API）→ [{title, url, ctime}]，按时间倒序，超时/失败返回 []。
+def _news_sina(code: str, days: int, limit: int) -> list[dict]:
+    """新浪个股新闻/公告（JSON API）→ [{title, url, ctime}]。"""
+    import json
+    import time as _time
+    import urllib.request
 
+    _clear_proxy()
+    sym = detect_market(code).code
+    url = ("https://feed.mix.sina.com.cn/api/roll/get?"
+           f"pageid=153&lid=2509&k={sym}&num={limit}&page=1")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+    data = json.loads(raw)
+    items = ((data.get("result") or {}).get("data")) or []
+    cutoff = _time.time() - max(int(days), 1) * 86400
+    out: list[dict] = []
+    for it in items:
+        ct = int(it.get("ctime") or 0)
+        if ct < cutoff:
+            continue
+        out.append({
+            "title": str(it.get("title") or ""),
+            "url": str(it.get("url") or ""),
+            "ctime": ct,
+        })
+    return out
+
+
+def _news_eastmoney(code: str, limit: int) -> list[dict]:
+    """东财个股新闻（akshare，线程超时防挂起）→ [{title, url, ctime}]。"""
+    import time as _time
+    import concurrent.futures as _cf
+    import akshare as ak
+
+    symbol = str(code).zfill(6)
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        df = ex.submit(ak.stock_news_em, symbol=symbol).result(timeout=12)
+    out: list[dict] = []
+    if df is None or df.empty:
+        return out
+    for _, row in df.head(max(int(limit), 1)).iterrows():
+        raw = str(row.get("发布时间") or "")
+        ct = 0
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                ct = int(_time.mktime(_time.strptime(raw, fmt)))
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        out.append({
+            "title": str(row.get("新闻标题") or ""),
+            "url": str(row.get("新闻链接") or ""),
+            "ctime": ct,
+        })
+    return out
+
+
+def _news_xueqiu(code: str, limit: int) -> list[dict]:
+    """雪球个股新闻（直连 API，先取 cookie）→ [{title, url, ctime}]。"""
+    import json
+    import re
+    import urllib.request
+    import http.cookiejar
+
+    symbol = str(code).zfill(6)
+    prefix = "SH" if symbol.startswith("6") else "SZ"
+    xq_symbol = f"{prefix}{symbol}"
+    url = ("https://stock.xueqiu.com/v5/stock/news.json?"
+           f"symbol={xq_symbol}&count={int(limit)}&source=all")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    cookie_req = urllib.request.Request("https://xueqiu.com/", headers={"User-Agent": ua})
+    opener.open(cookie_req, timeout=10)
+    req = urllib.request.Request(url, headers={"User-Agent": ua, "Referer": "https://xueqiu.com/"})
+    resp = opener.open(req, timeout=10)
+    data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    out: list[dict] = []
+    for item in (data.get("data", {}).get("items", []) or [])[: int(limit)]:
+        title = str(item.get("title") or "").strip()
+        text = re.sub(r"<[^>]+>", "", str(item.get("text") or "")).strip()
+        out.append({
+            "title": title or text[:80],
+            "url": str(item.get("target") or ""),
+            "ctime": 0,
+        })
+    return out
+
+
+def fetch_stock_news(
+    code: str,
+    days: int = 7,
+    limit: int = 20,
+    sources: Optional[list[str]] = None,
+) -> list[dict]:
+    """多源个股新闻 → [{title, url, ctime}]，按时间倒序，单源失败自动跳过。
+
+    顺序：东财 → 雪球 → 新浪兜底；标题按前缀去重，最终不超过 limit 条。
     用于漏斗 L4 新闻风险层：标题命中风险关键词（诉讼/减持/立案等）时降分提示。
     """
-    try:
-        _clear_proxy()
-        import json
-        import time as _time
-        import urllib.request
-        sym = detect_market(code).code
-        url = ("https://feed.mix.sina.com.cn/api/roll/get?"
-               f"pageid=153&lid=2509&k={sym}&num={limit}&page=1")
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
-        data = json.loads(raw)
-        items = ((data.get("result") or {}).get("data")) or []
-        cutoff = _time.time() - max(int(days), 1) * 86400
-        out: list[dict] = []
-        for it in items:
-            ct = int(it.get("ctime") or 0)
-            if ct < cutoff:
-                continue
-            out.append({
-                "title": str(it.get("title") or ""),
-                "url": str(it.get("url") or ""),
-                "ctime": ct,
-            })
-        return out
-    except Exception as e:  # noqa: BLE001
-        log.debug("个股新闻不可用 %s: %s", code, e)
-        return []
+    _clear_proxy()
+    allowed = [
+        s for s in (sources or ["eastmoney", "xueqiu", "sina"])
+        if s in ("eastmoney", "xueqiu", "sina")
+    ]
+    merged: list[dict] = []
+    fetchers = []
+    if "eastmoney" in allowed:
+        fetchers.append(lambda: _news_eastmoney(code, limit))
+    if "xueqiu" in allowed:
+        fetchers.append(lambda: _news_xueqiu(code, limit))
+    if "sina" in allowed:
+        fetchers.append(lambda: _news_sina(code, days, limit))
+    for fn in fetchers:
+        try:
+            merged.extend(fn())
+        except Exception as e:  # noqa: BLE001
+            log.debug("新闻源失败 %s: %s", code, e)
+    seen: set[str] = set()
+    out: list[dict] = []
+    for n in sorted(merged, key=lambda x: x.get("ctime") or 0, reverse=True):
+        t = str(n.get("title") or "").strip()
+        if not t:
+            continue
+        key = t[:20]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+        if len(out) >= max(int(limit), 1):
+            break
+    return out

@@ -13,6 +13,7 @@ small cloud VM). A ``--test`` flag fires one cycle immediately for sanity.
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -44,6 +45,63 @@ except Exception:  # noqa: BLE001
 log = get_logger("Scheduler")
 
 
+def _funnel_message(
+    hits: list,
+    stages: list,
+    total: int,
+    elapsed: float,
+) -> tuple[str, str, str]:
+    """收盘漏斗邮件：(title, text, html)。"""
+    stat = " → ".join(
+        f"{s.get('before', 0)}>{s.get('after', 0)}" for s in stages
+    ) or "-"
+    now = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
+    title = f"GP助手 · 收盘漏斗 Top{len(hits)} {now}"
+    lines = [f"全市场 {total} 只，漏斗：{stat}（{elapsed:.0f}s）", ""]
+    for i, h in enumerate(hits, 1):
+        lines.append(
+            f"{i}. {h.get('code')} {h.get('name')} | {h.get('close')} "
+            f"({h.get('change_pct')}%) | 评分{h.get('score')}"
+        )
+    rows = "".join(
+        "<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%%</td><td>%s</td></tr>"
+        % (i, h.get("code"), h.get("name"), h.get("close"),
+           h.get("change_pct"), h.get("score"))
+        for i, h in enumerate(hits, 1)
+    )
+    html = (
+        "<p>全市场 <b>%s</b> 只，漏斗：<b>%s</b>（%.0fs）</p>"
+        "<table border='1' cellpadding='4' style='border-collapse:collapse'>"
+        "<tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th><th>评分</th></tr>"
+        "%s</table>"
+    ) % (total, stat, elapsed, rows)
+    return title, "\n".join(lines), html
+
+
+def _funnel_due(now: datetime, last_date: str, cfg: dict) -> bool:
+    """收盘漏斗是否该触发：交易日 ≥ time 且当天还没跑过。"""
+    if not cfg.get("enabled", True):
+        return False
+    if now.weekday() >= 5:
+        return False
+    hhmm = f"{now.hour:02d}:{now.minute:02d}"
+    if hhmm < str(cfg.get("time") or "15:10"):
+        return False
+    return last_date != now.strftime("%Y-%m-%d")
+
+
+def _weekly_due(now: datetime, last_date: str, cfg: dict) -> bool:
+    """周报是否该触发：周五 ≥ time 且当天还没生成过。"""
+    if not cfg.get("enabled", True):
+        return False
+    if now.weekday() != 4:
+        return False
+    hhmm = f"{now.hour:02d}:{now.minute:02d}"
+    if hhmm < str(cfg.get("time") or "15:30"):
+        return False
+    return last_date != now.strftime("%Y-%m-%d")
+
+
 class MarketScheduler:
     def __init__(self, config_path: str = "config/notify.yaml") -> None:
         self.cfg = load_yaml(config_path) or {}
@@ -54,6 +112,8 @@ class MarketScheduler:
         self.ushk_interval = int(sched.get("ushk_interval_min", 10)) * 60
         self.us_winter = bool(sched.get("us_winter", True))
         self.poll_interval = int(sched.get("poll_interval_sec", 60))
+        self.daily_funnel_cfg = sched.get("daily_funnel") or {}
+        self.weekly_cfg = sched.get("weekly_report") or {}
         # 启用的市场：只推送这些市场的分析，默认全部（CN/HK/US）
         raw_markets = self.cfg.get("enabled_markets") or ["CN", "HK", "US"]
         self.enabled_markets = [m.upper() for m in raw_markets
@@ -316,6 +376,84 @@ class MarketScheduler:
             else:
                 log.info("[%s] 非交易时段，跳过", m)
 
+    # ------------------------------------------------------------------ #
+    def run_funnel_once(self) -> dict:
+        """跑一遍全市场漏斗，结果写 results/latest_funnel.json 并推送邮件。"""
+        from .funnel import FunnelScanner
+
+        funnel_cfg = (self.cfg or {}).get("funnel") or {}
+        log.info("开始收盘漏斗（全市场四层过滤）…")
+        result = FunnelScanner(funnel_cfg).run(holdings_mgr=self.holdings)
+        data = dict(result)
+        data["as_of"] = self._now_beijing().isoformat(timespec="seconds")
+        root = Path(__file__).resolve().parents[1]
+        out_dir = root / "results"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "latest_funnel.json"
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("漏斗结果已落盘 %s（Top %d）", path, len(data.get("hits") or []))
+
+        top = (data.get("hits") or [])[: int(funnel_cfg.get("top_n") or 10)]
+        title, text, html = _funnel_message(
+            top, data.get("stages") or [], data.get("total") or 0,
+            data.get("elapsed") or 0.0,
+        )
+        self.notifier.send(title, text, html)
+        return data
+
+    def _maybe_run_daily_funnel(self, now: datetime) -> None:
+        """交易日 15:10 后跑一次收盘漏斗（同日不重复）。"""
+        funnel_cfg = (self.cfg or {}).get("funnel") or {}
+        df = self.daily_funnel_cfg
+        if not funnel_cfg.get("enabled"):
+            return
+        root = Path(__file__).resolve().parents[1]
+        path = root / "results" / "latest_funnel.json"
+        last_date = ""
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                last_date = str(data.get("as_of") or "")[:10]
+        except Exception:  # noqa: BLE001
+            pass
+        if not _funnel_due(now, last_date, df):
+            return
+        try:
+            self.run_funnel_once()
+        except Exception as e:  # noqa: BLE001
+            log.error("收盘漏斗执行失败: %s", e)
+
+    def _maybe_run_weekly_report(self, now: datetime) -> None:
+        """周五 15:30 后生成周报并邮件附件发送（同日不重复）。"""
+        wc = self.weekly_cfg
+        root = Path(__file__).resolve().parents[1]
+        last = root / "results" / "weekly" / "last_run"
+        last_date = ""
+        try:
+            if last.exists():
+                last_date = last.read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        if not _weekly_due(now, last_date, wc):
+            return
+        try:
+            from ..weekly_report import run as weekly_run
+
+            holdings_list = [dict(r) for r in self.holdings.all()]
+            top_n = int((self.cfg.get("funnel") or {}).get("top_n") or 10)
+            codes = weekly_run.collect_codes(holdings_list, root=root, top_n=top_n)
+            path = weekly_run.run_weekly_report(root, stocks=codes, top_n=top_n)
+            title, text, html = weekly_run.report_email(path, codes)
+            self.notifier.send(
+                title, text, html,
+                attachments=[(path.name, path.read_bytes())],
+            )
+            last.parent.mkdir(parents=True, exist_ok=True)
+            last.write_text(now.strftime("%Y-%m-%d"), encoding="utf-8")
+            log.info("周报已生成并发送 %s", path)
+        except Exception as e:  # noqa: BLE001
+            log.error("周报生成/发送失败: %s", e)
+
     def run_forever(self) -> None:
         """Block forever, polling every ``poll_interval`` seconds."""
         log.info("调度器启动 | A股每%ds / 美股港股每%ds",
@@ -335,6 +473,16 @@ class MarketScheduler:
                         except Exception as e:  # noqa: BLE001
                             log.error("[%s] 执行失败: %s", m, e)
                         last[m] = now_ts
+                # 每日 15:10 收盘漏斗（同日不重复）
+                try:
+                    self._maybe_run_daily_funnel(now)
+                except Exception as e:  # noqa: BLE001
+                    log.error("收盘漏斗触发失败: %s", e)
+                # 周五 15:30 周报（本周不重复）
+                try:
+                    self._maybe_run_weekly_report(now)
+                except Exception as e:  # noqa: BLE001
+                    log.error("周报触发失败: %s", e)
                 status = {m: ("开" if self._in_session(m, now) else "休")
                           for m in self.enabled_markets}
                 log.info("状态 %s", status)
