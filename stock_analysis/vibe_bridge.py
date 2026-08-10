@@ -22,6 +22,11 @@ from ..utils import get_logger
 log = get_logger("VibeBridge")
 
 DEFAULT_BASE = "http://127.0.0.1:8899"
+LLM_SYSTEM_PROMPT = (
+    "你是 GP助手 的二次分析引擎，只输出中文点评正文。"
+    "点评必须基于投喂 JSON 的事实，不编造；不要输出过程模板；"
+    "不要给自动下单指令，用「可考虑 / 需观察」。"
+)
 PROMPT_PREFIX = """你是二次分析引擎。下面 JSON 来自「GP助手」本地持仓系统（事实源）。
 要求：
 1. 只基于 JSON 与你能验证的公开数据做研究点评，不要编造未给出的成本/数量。
@@ -623,6 +628,63 @@ def submit_secondary_analysis(
         "Vibe 二次分析 ok=%s session=%s len=%s",
         out["ok"], sid, len(out.get("summary") or ""),
     )
+    return out
+
+
+def submit_llm_analysis(
+    payload: dict,
+    *,
+    root: Path,
+    api_key: str,
+    base_url: str = "https://api.deepseek.com",
+    model: str = "deepseek-chat",
+    timeout: int = 180,
+    max_tokens: int = 3000,
+    temperature: float = 0.3,
+) -> dict[str, Any]:
+    """Vibe 不可用时的 OpenAI 兼容 LLM 兜底（DeepSeek / 通义 / Ollama 等）。
+
+    与 Vibe 共用同一套投喂载荷与正文要求；结果同样落盘 results/vibe/，
+    并经 build_display_summary 生成邮件展示。
+    """
+    from .ai_client import chat_completion
+
+    payload_path = save_payload(root, payload)
+    prompt = _fit_prompt(payload, PROMPT_PREFIX)
+    out: dict[str, Any] = {
+        "ok": False,
+        "summary": "",
+        "session_id": None,
+        "attempt_id": None,
+        "message_id": None,
+        "payload_path": str(payload_path),
+        "result_path": None,
+        "error": None,
+        "raw": None,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "source": "llm",
+    }
+    text = chat_completion(
+        [
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        timeout=timeout,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    if not text:
+        out["error"] = "LLM 兜底未返回正文（检查 ai.api_key / base_url / 网络）"
+        out["summary"] = "LLM 兜底调用失败，本次邮件不含二次分析。"
+        return _save_result(root, out)
+    out["ok"] = True
+    out["summary"] = text
+    out["raw"] = {"provider": base_url, "model": model}
+    out = _save_result(root, out)
+    log.info("LLM 兜底二次分析 ok=True len=%s", len(text))
     return out
 
 

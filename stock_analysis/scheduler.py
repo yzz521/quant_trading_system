@@ -24,7 +24,12 @@ from .diagnosis import StockDiagnoser
 from .scanner import StockScanner
 from .notifier import Notifier, build_market_message
 from .ai_summary import generate_market_summary
-from .vibe_bridge import build_payload, save_latest_scan, submit_secondary_analysis
+from .vibe_bridge import (
+    build_payload,
+    save_latest_scan,
+    submit_llm_analysis,
+    submit_secondary_analysis,
+)
 from .vibe_format import build_display_summary
 from .holdings import Holdings
 from .buy_power import annotate_list
@@ -189,10 +194,15 @@ class MarketScheduler:
             log.warning("[%s] AI 点评跳过: %s", market, e)
             ai_summary = None
 
-        # Vibe 二次分析（可选；超时/失败不阻断邮件）
+        # 二次分析（Vibe 优先，失败时用 AI LLM 兜底；均不阻断邮件）
         vibe_summary = None
         vibe_cfg = (self.cfg or {}).get("vibe") or {}
-        if vibe_cfg.get("enabled") and vibe_cfg.get("on_email", True):
+        ai_cfg = (self.cfg or {}).get("ai") or {}
+        vibe_enabled = bool(vibe_cfg.get("enabled"))
+        fallback_enabled = bool(vibe_cfg.get("fallback_llm", True)) and bool(
+            ai_cfg.get("enabled") and str(ai_cfg.get("api_key") or "").strip()
+        )
+        if (vibe_enabled or fallback_enabled) and vibe_cfg.get("on_email", True):
             try:
                 from pathlib import Path as _P
                 root = _P(__file__).resolve().parents[1]
@@ -204,30 +214,57 @@ class MarketScheduler:
                     candidates=(scan_hits or [])[: vibe_n],
                     market=market,
                 )
-                base = str(vibe_cfg.get("base_url") or "http://127.0.0.1:8899")
-                auth = str(vibe_cfg.get("auth_key") or "")
-                wait = float(vibe_cfg.get("max_wait_sec") or 120)
-                vres = submit_secondary_analysis(
-                    payload,
-                    root=root,
-                    base_url=base,
-                    auth_key=auth,
-                    max_wait_sec=wait,
-                    poll_sec=float(vibe_cfg.get("poll_sec") or 3),
-                )
-                if vres.get("clean_summary"):
+                vres = None
+                if vibe_enabled:
+                    try:
+                        vres = submit_secondary_analysis(
+                            payload,
+                            root=root,
+                            base_url=str(vibe_cfg.get("base_url") or "http://127.0.0.1:8899"),
+                            auth_key=str(vibe_cfg.get("auth_key") or ""),
+                            max_wait_sec=float(vibe_cfg.get("max_wait_sec") or 360),
+                            poll_sec=float(vibe_cfg.get("poll_sec") or 3),
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("[%s] Vibe 异常: %s", market, e)
+                        vres = None
+                if (not vres or not vres.get("ok")) and fallback_enabled:
+                    log.info("[%s] Vibe 不可用，切换到 LLM 兜底…", market)
+                    vres = submit_llm_analysis(
+                        payload,
+                        root=root,
+                        api_key=str(ai_cfg.get("api_key") or ""),
+                        base_url=str(ai_cfg.get("base_url") or "https://api.deepseek.com"),
+                        model=str(
+                            vibe_cfg.get("fallback_model")
+                            or ai_cfg.get("model")
+                            or "deepseek-chat"
+                        ),
+                        timeout=int(
+                            vibe_cfg.get("fallback_timeout") or ai_cfg.get("timeout") or 180
+                        ),
+                        max_tokens=int(vibe_cfg.get("fallback_max_tokens") or 3000),
+                        temperature=float(ai_cfg.get("temperature") or 0.3),
+                    )
+                if vres and vres.get("clean_summary"):
                     vibe_summary = vres["clean_summary"]
-                elif vres.get("summary"):
+                elif vres and vres.get("summary"):
                     disp = build_display_summary(vres.get("summary") or "")
                     vibe_summary = disp.get("clean_summary") or (vres.get("summary") or "")[:2000]
-                if vres.get("partial") and vibe_summary:
-                    vibe_summary = "（Vibe 过程稿摘要）\n" + vibe_summary
-                if not vibe_summary and vres.get("error"):
-                    log.warning("[%s] Vibe 无正文: %s", market, vres.get("error"))
+                if vres and vres.get("partial") and vibe_summary:
+                    vibe_summary = "（过程稿摘要）\n" + vibe_summary
+                if not vibe_summary and vres and vres.get("error"):
+                    log.warning("[%s] 二次分析无正文: %s", market, vres.get("error"))
                 else:
-                    log.info("[%s] Vibe 二次分析 ok=%s partial=%s", market, vres.get("ok"), vres.get("partial"))
+                    log.info(
+                        "[%s] 二次分析 ok=%s partial=%s source=%s",
+                        market,
+                        vres.get("ok") if vres else None,
+                        vres.get("partial") if vres else None,
+                        vres.get("source") if vres else "-",
+                    )
             except Exception as e:  # noqa: BLE001
-                log.warning("[%s] Vibe 跳过: %s", market, e)
+                log.warning("[%s] 二次分析跳过: %s", market, e)
                 vibe_summary = None
 
 
