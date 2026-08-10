@@ -36,6 +36,47 @@ PROMPT_PREFIX = """你是二次分析引擎。下面 JSON 来自「GP助手」�
 JSON 如下：
 """
 
+# Vibe API 的 content 字段实测上限 5000 字符；留余量避免边界抖动
+_VIBE_CONTENT_LIMIT = 4700
+
+
+def _fit_prompt(payload: dict, prefix: str, limit: int = _VIBE_CONTENT_LIMIT) -> str:
+    """把投喂 JSON 压缩/裁剪到 Vibe content 长度限制内。
+
+    策略：紧凑 JSON（去缩进）→ 精简 candidates 字段并逐条裁剪数量 → 最后硬截断兜底。
+    完整载荷仍会落盘（save_payload），只是发给 Vibe 的正文被收紧。
+    """
+
+    def compact(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+    body = compact(payload)
+    if len(prefix) + len(body) <= limit:
+        return prefix + body
+
+    slim = dict(payload)
+    slim["candidates"] = []
+    base_len = len(prefix) + len(compact(slim))
+    kept: list[dict] = []
+    slim_fields = ("code", "name", "score", "matched", "close", "change_pct", "matched_days")
+    for c in payload.get("candidates") or []:
+        if not isinstance(c, dict):
+            continue
+        item = {k: c.get(k) for k in slim_fields}
+        kept.append(item)
+        slim["candidates"] = kept
+        if len(prefix) + len(compact(slim)) > limit:
+            kept.pop()
+            break
+    slim["candidates"] = kept
+    body = compact(slim)
+    if len(prefix) + len(body) <= limit:
+        return prefix + body
+
+    # 兜底：截断并注明（正常不会走到）
+    cut = max(limit - len(prefix) - 60, 120)
+    return prefix + body[:cut] + "\n...（内容过长已截断）"
+
 
 def _results_dir(root: Path) -> Path:
     d = root / "results" / "vibe"
@@ -468,7 +509,7 @@ def submit_secondary_analysis(
     max_wait_sec: float = 300.0,
 ) -> dict[str, Any]:
     payload_path = save_payload(root, payload)
-    prompt = PROMPT_PREFIX + json.dumps(payload, ensure_ascii=False, indent=2)
+    prompt = _fit_prompt(payload, PROMPT_PREFIX)
     out: dict[str, Any] = {
         "ok": False,
         "summary": "",
@@ -527,6 +568,18 @@ def submit_secondary_analysis(
     out["message_id"] = mid
     out["attempt_id"] = aid
     out["raw"] = {"session": sess, "message_ack": msg_resp}
+
+    if not (msg_code and msg_code < 400):
+        detail = msg_resp
+        if isinstance(msg_resp, dict) and msg_resp.get("error"):
+            e = msg_resp["error"]
+            try:
+                detail = json.loads(e) if isinstance(e, str) else e
+            except Exception:  # noqa: BLE001
+                detail = e
+        out["error"] = f"Vibe 拒绝投喂消息 HTTP {msg_code}：{detail}"
+        out["summary"] = "发送失败：Vibe 拒绝了投喂消息，未进入生成流程。"
+        return _save_result(root, out)
 
     immediate = _best_summary(_extract_assistant_texts(msg_resp))
     if immediate and not _looks_like_ack_only(immediate):
