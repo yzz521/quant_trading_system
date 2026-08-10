@@ -71,9 +71,10 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ] && [ ! -e "$B/runtime/bin/python3" ]; then
             ln -s "$PY_NAME" "$B/runtime/bin/python3"
           fi
-          # 便携包副本可安全修改：去掉 PEP668 标记后用自带 pip 安装依赖
-          rm -f "$B/runtime/lib/python3.12/EXTERNALLY-MANAGED"
-          "$PY_BIN" -m pip install -q -r packaging/requirements-release.txt
+          # 便携包副本可安全修改：去掉 PEP668 标记（macOS 在 lib/python3.12/，
+          # Windows 在 Lib/，统一按文件名找）后用自带 pip 安装依赖
+          find "$B/runtime" -name "EXTERNALLY-MANAGED" -delete
+          "$PY_BIN" -m pip install --break-system-packages -q -r packaging/requirements-release.txt
 
           # 便携包默认关闭登录门禁（不携带任何个人密码）
           printf 'enabled: false\nusers: []\n' > "$B/quant_trading_system/config/users.yaml"
