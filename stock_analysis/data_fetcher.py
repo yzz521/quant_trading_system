@@ -178,6 +178,7 @@ def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
     """新浪全市场快照（一次调用）→ 标准化 code/name/close/pct_chg/volume/amount。
 
     东财批量快照在当前网络下不可用，新浪源稳定。用于漏斗 L1 硬过滤。
+    同时透出 L2 需要的市值/PE/换手率字段（腾讯行情失败时做 L2 回退）。
     """
     try:
         _clear_proxy()
@@ -188,11 +189,19 @@ def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
         df = df.rename(columns={
             "代码": "code", "名称": "name", "最新价": "close",
             "涨跌幅": "pct_chg", "成交量": "volume", "成交额": "amount",
+            "总市值": "total_cap", "流通市值": "float_cap",
+            "市盈率-动态": "pe", "换手率": "turnover", "市净率": "pb",
         })
-        for col in ("close", "pct_chg", "volume", "amount"):
+        for col in ("close", "pct_chg", "volume", "amount",
+                    "total_cap", "float_cap", "pe", "turnover", "pb"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
         df["code"] = df["code"].astype(str).str.extract(r"(\d{6})")[0].str.zfill(6)
-        return df[["code", "name", "close", "pct_chg", "volume", "amount"]]
+        keep = ["code", "name", "close", "pct_chg", "volume", "amount"]
+        if "total_cap" in df.columns:
+            df["total_cap_yi"] = df["total_cap"] / 1e8
+            df["float_cap_yi"] = df["float_cap"] / 1e8
+            keep += ["total_cap_yi", "float_cap_yi", "pe", "turnover", "pb"]
+        return df[[c for c in keep if c in df.columns]]
     except Exception as e:  # noqa: BLE001
         log.warning("新浪全市场快照获取失败: %s", e)
         return None

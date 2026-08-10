@@ -31,6 +31,7 @@ funnel:
   min_turnover: 0.3         # L2 换手率下限（%）
   l3_limit: 80              # L3 技术面后进入 L4 的候选数
   l3_conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"]
+  l2_fallback_spot: true    # 腾讯行情失败时用新浪快照做 L2 过滤（避免漏斗中断）
   # L4 新闻风险层：近7天新闻/公告标题命中关键词则降分并标注（如 000056 的诉讼公告）
   news_enabled: true
   news_sources: ["eastmoney", "xueqiu", "sina"]   # 多源顺序；单源失败自动跳过，新浪兜底

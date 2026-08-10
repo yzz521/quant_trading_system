@@ -394,11 +394,14 @@ class MarketScheduler:
         log.info("漏斗结果已落盘 %s（Top %d）", path, len(data.get("hits") or []))
 
         top = (data.get("hits") or [])[: int(funnel_cfg.get("top_n") or 10)]
-        title, text, html = _funnel_message(
-            top, data.get("stages") or [], data.get("total") or 0,
-            data.get("elapsed") or 0.0,
-        )
-        self.notifier.send(title, text, html)
+        if not top:
+            log.warning("漏斗结果为空（可能行情源不可用），跳过邮件推送")
+        else:
+            title, text, html = _funnel_message(
+                top, data.get("stages") or [], data.get("total") or 0,
+                data.get("elapsed") or 0.0,
+            )
+            self.notifier.send(title, text, html)
         return data
 
     def _maybe_run_daily_funnel(self, now: datetime) -> None:
