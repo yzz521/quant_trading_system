@@ -36,6 +36,14 @@ def _homebrew_lib() -> str:
     return ""
 
 
+def _certifi_path() -> str:
+    try:
+        import certifi
+        return certifi.where()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def load_funnel_top(root: Path = ROOT, limit: int = 10) -> list[dict]:
     path = root / "results" / "latest_funnel.json"
     if path.exists():
@@ -110,6 +118,9 @@ def run_weekly_report(
         env["DYLD_LIBRARY_PATH"] = hb + (
             ":" + env["DYLD_LIBRARY_PATH"] if env.get("DYLD_LIBRARY_PATH") else ""
         )
+    cf = _certifi_path()
+    if cf:
+        env.setdefault("SSL_CERT_FILE", cf)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-800:]
