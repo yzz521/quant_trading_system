@@ -22,6 +22,7 @@ except Exception:
 from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.vibe_bridge import (
     build_payload,
+    enrich_payload,
     health,
     list_results,
     load_latest_scan,
@@ -87,6 +88,10 @@ payload = build_payload(
     candidates=candidates,
     market="CN",
 )
+try:
+    payload = enrich_payload(payload, with_chip=False)
+except Exception:
+    pass
 with st.expander("预览投喂 JSON", expanded=False):
     st.code(json.dumps(payload, ensure_ascii=False, indent=2), language="json")
 

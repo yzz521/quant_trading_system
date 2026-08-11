@@ -21,12 +21,14 @@ import pandas as pd
 from ..utils import get_logger
 from .data_fetcher import (
     detect_market,
+    fetch_industry_map,
     fetch_kline_sina_api,
     fetch_money_flow,
     fetch_stock_news,
     fetch_spot_snapshot,
     fetch_tencent_quotes,
 )
+from .news_sentiment import score_text, sentiment_label
 from .scanner import PRESETS, ScanHit, _days_held
 
 log = get_logger("Funnel")
@@ -43,8 +45,10 @@ DEFAULTS = {
     "l3_workers": 5,               # L3 并发数（腾讯K线限流敏感，不宜太高）
     "main_net_bonus": 10,          # L4 主力净流入为正时的加分
     "l2_fallback_spot": True,      # 腾讯行情失败时用新浪快照做 L2 过滤
+    "industry_diversify": {"enabled": False, "max_per_industry": 3},  # 行业分散
     "news_enabled": True,          # L4 新闻风险层开关
     "news_sources": ["eastmoney", "xueqiu", "sina"],  # 多源顺序；单源失败自动跳过
+    "news_sentiment": {"enabled": True},  # 新闻标题情绪标注（偏多/偏空/中性）
     "news_days": 7,                # 只看近 N 天新闻/公告
     "news_limit": 20,
     "news_penalty": 15,            # 命中风险关键词的降分
@@ -303,7 +307,12 @@ class FunnelScanner:
             for n in results.get(str(it["code"]).strip(), []):
                 matched = [k for k in keywords if k in n.get("title", "")]
                 if matched:
-                    hits.append({"title": n["title"], "url": n["url"], "keywords": matched})
+                    entry: dict = {"title": n["title"], "url": n["url"], "keywords": matched}
+                    if (self.cfg.get("news_sentiment") or {}).get("enabled", True):
+                        s = score_text(n.get("title", ""))
+                        entry["sentiment"] = s
+                        entry["sentiment_label"] = sentiment_label(s)
+                    hits.append(entry)
                     if len(hits) >= 3:
                         break
             it["news_risks"] = hits
@@ -366,6 +375,15 @@ class FunnelScanner:
 
         top = self.stage_l4(tech, quote_map, holdings_mgr, held)
         stages.append(FunnelStage("L4 资金+风控", len(tech), len(top)))
+        idiv = self.cfg.get("industry_diversify") or {}
+        if idiv.get("enabled"):
+            try:
+                ind_map = fetch_industry_map()
+                top = self._apply_industry_cap(
+                    top, ind_map, int(idiv.get("max_per_industry") or 3)
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("行业分散跳过: %s", e)
         log.info(
             "漏斗完成: %s → %s 只，耗时 %.1fs",
             " → ".join(f"{s.before}>{s.after}" for s in stages),
@@ -378,3 +396,25 @@ class FunnelScanner:
             total=total,
             elapsed=round(time.time() - t0, 1),
         ).to_dict()
+
+    def _apply_industry_cap(
+        self,
+        items: list[dict],
+        industry_map: dict[str, str],
+        max_per_industry: int,
+    ) -> list[dict]:
+        """同行业最多保留 max_per_industry 只（保留靠前者），并给标的标注行业。"""
+        if max_per_industry <= 0 or not industry_map:
+            return items
+        counts: dict[str, int] = {}
+        out: list[dict] = []
+        for it in items:
+            code = str(it.get("code") or "").strip().zfill(6)
+            ind = industry_map.get(code, "")
+            if ind:
+                it["industry"] = ind
+                if counts.get(ind, 0) >= max_per_industry:
+                    continue
+                counts[ind] = counts.get(ind, 0) + 1
+            out.append(it)
+        return out

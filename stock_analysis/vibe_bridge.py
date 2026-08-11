@@ -23,20 +23,26 @@ log = get_logger("VibeBridge")
 
 DEFAULT_BASE = "http://127.0.0.1:8899"
 LLM_SYSTEM_PROMPT = (
-    "你是 GP助手 的二次分析引擎，只输出中文点评正文。"
+    "你是 GP助手 的二次分析引擎（多智能体风格的单一模型执行者）。"
+    "按「事实→技术→行业与情绪→风控→结论」五层顺序分析，只输出中文点评正文。"
     "点评必须基于投喂 JSON 的事实，不编造；不要输出过程模板；"
     "不要给自动下单指令，用「可考虑 / 需观察」。"
 )
-PROMPT_PREFIX = """你是二次分析引擎。下面 JSON 来自「GP助手」本地持仓系统（事实源）。
-要求：
-1. 只基于 JSON 与你能验证的公开数据做研究点评，不要编造未给出的成本/数量。
-2. 不要给出自动下单指令；用「可考虑 / 需观察」。
-3. 优先：持仓风险、深套处理、满仓与可买性、candidates 扫描命中股是否值得关注及其与持仓的关系。
-4. **只输出最终中文点评正文**，不要输出 Goal/Progress/Remaining Work/Key Decisions 等过程模板。
-5. 正文结构必须是：①一段总括 ②按标的分条（观点+风险）③三条纪律提醒 ④免责声明。
-6. 明确声明：仅研究参考，非投资建议；未校验实时行情。
-7. **禁止**调用 A 股行情/基金工具；以投喂 JSON 为唯一事实源；pnl_pct 可直接用。
-8. 不要写「尚未输出」「In Progress」；算术可心算，不必调用 calc 工具。
+PROMPT_PREFIX = """你是 GP助手 的二次分析引擎。下面 JSON 来自「GP助手」本地持仓系统（事实源）。
+请按五步框架分析，并只输出最终中文点评正文：
+
+① 事实层（账本与行情）：以 JSON 为唯一事实源，逐项核对持仓成本/数量/现价/pnl；
+② 技术面：结合 candidates 的 matched 条件与评分，简述趋势与动量；
+③ 行业与情绪：结合 JSON 中的 industry / industry_category 与新闻 sentiment 字段，
+   说明持仓与候选的行业分布、集中度与近期消息情绪；
+④ 风控层：单票上限、满仓与可买性、单一行业/金融集中度、深套处理；
+⑤ 结论层：给出「可考虑 / 需观察」判断 + 三条纪律提醒 + 免责声明。
+
+硬性要求：
+- 只基于 JSON 事实，不编造成本/数量；派生值可心算并标注公式。
+- 不要给出自动下单指令；不要输出 Goal/Progress/Remaining Work 等过程模板。
+- 正文结构：①一段总括 ②按标的分条（观点+风险）③三条纪律提醒 ④免责声明。
+- 明确声明：仅研究参考，非投资建议；未校验实时行情。
 
 JSON 如下：
 """
@@ -153,6 +159,46 @@ def build_payload(
             "note": "二次分析 only；以 GP助手账本为准；行情失败时勿空等工具",
         },
     }
+
+
+def enrich_payload(
+    payload: dict,
+    *,
+    industry_map: Optional[dict[str, str]] = None,
+    with_chip: bool = True,
+) -> dict:
+    """给 payload 补充 行业/行业类别 与 持仓筹码 字段；单点失败不中断。"""
+    from .data_fetcher import fetch_chip_distribution, fetch_industry_map
+    from .industry import category_label, get_industry_category
+
+    try:
+        ind_map = industry_map if industry_map is not None else fetch_industry_map()
+    except Exception as e:  # noqa: BLE001
+        log.debug("行业映射获取失败: %s", e)
+        ind_map = {}
+
+    def _annotate(item: dict) -> None:
+        code = str(item.get("code") or "").strip().zfill(6)
+        ind = ind_map.get(code, "")
+        if ind:
+            item["industry"] = ind
+            item["industry_category"] = category_label(get_industry_category(ind))
+
+    for h in payload.get("holdings") or []:
+        if not isinstance(h, dict):
+            continue
+        _annotate(h)
+        if with_chip:
+            try:
+                chip = fetch_chip_distribution(str(h.get("code") or ""))
+                if chip:
+                    h["chip"] = chip
+            except Exception:  # noqa: BLE001
+                pass
+    for c in payload.get("candidates") or []:
+        if isinstance(c, dict):
+            _annotate(c)
+    return payload
 
 
 def save_payload(root: Path, payload: dict) -> Path:
