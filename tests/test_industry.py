@@ -36,6 +36,17 @@ def test_category():
     assert category_label(IndustryCategory.CYCLICAL) == "周期"
 
 
+def test_sina_board_names():
+    """新浪 49 板块名应正确归类（金融行业此前误判为其他）。"""
+    assert get_industry_category("金融行业") is IndustryCategory.FINANCIAL
+    assert get_industry_category("钢铁行业") is IndustryCategory.CYCLICAL
+    assert get_industry_category("建筑建材") is IndustryCategory.CYCLICAL
+    assert get_industry_category("酿酒行业") is IndustryCategory.DEFENSIVE
+    assert get_industry_category("医药生物") is IndustryCategory.DEFENSIVE
+    assert get_industry_category("电子器件") is IndustryCategory.GROWTH
+    assert get_industry_category("半导体") is IndustryCategory.GROWTH
+
+
 def test_industry_cap():
     f = FunnelScanner({})
     items = [
