@@ -40,3 +40,18 @@ def test_submit_llm_analysis_failure(tmp_path, monkeypatch):
     res = submit_llm_analysis(_payload(), root=tmp_path, api_key="sk-test")
     assert res["ok"] is False
     assert "LLM 兜底" in (res.get("error") or "")
+    # 失败文案足够长，邮件会直接展示原文而不是只剩声明
+    assert len(res.get("summary") or "") > 120
+
+
+def test_utils_sets_ssl_cert_file():
+    import os
+
+    from quant_trading_system import utils  # noqa: F401  # 导入即设置 env
+
+    try:
+        import certifi
+    except Exception:  # noqa: BLE001
+        return
+    if os.environ.get("SSL_CERT_FILE"):
+        assert os.environ["SSL_CERT_FILE"] == certifi.where()

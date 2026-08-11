@@ -678,7 +678,11 @@ def submit_llm_analysis(
     )
     if not text:
         out["error"] = "LLM 兜底未返回正文（检查 ai.api_key / base_url / 网络）"
-        out["summary"] = "LLM 兜底调用失败，本次邮件不含二次分析。"
+        out["summary"] = (
+            "LLM 兜底调用失败，本次邮件不含二次分析。请检查 config/notify.yaml 的 "
+            "ai.api_key / base_url / 网络是否正常（例如 Python 证书库为空时可用 "
+            "certifi 兜底），或查看调度器日志中 AIClient 的警告信息后重试。"
+        )
         return _save_result(root, out)
     out["ok"] = True
     out["summary"] = text
