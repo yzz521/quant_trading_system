@@ -20,6 +20,14 @@ scan:
   us_pool: ["AAPL", "MSFT", "TSLA"]
   hk_pool: ["00700", "09988"]
 
+# V2 今日机会：对候选股批量生成交易计划，随每日邮件推送「今日机会」区块
+opportunity:
+  enabled: false            # 开启后每日邮件将包含交易计划（评分/入场/止损/目标/仓位）
+  max_stocks: 15            # 候选上限（优先用扫描命中，其次股票池）
+  account_equity: 100000    # 账户资金（元），用于计算建议仓位
+  workers: 5                # 并发拉取数（行情接口敏感，不宜太高）
+  min_opportunity_score: 0  # 机会分下限，过滤弱机会（0=不过滤）
+
 # 收盘漏斗（全市场四层过滤 → Top N 关注池）
 funnel:
   enabled: true

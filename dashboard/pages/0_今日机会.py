@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
@@ -181,3 +182,58 @@ if run:
         st.caption("回测为历史规则有效性验证，不构成对未来表现的保证。")
     else:
         st.info("样本不足，未生成回测。")
+
+# --------------------------------------------------------------------------- #
+# 批量机会扫描
+# --------------------------------------------------------------------------- #
+st.divider()
+st.subheader("📋 批量机会扫描")
+bcol1, bcol2, bcol3 = st.columns([2, 1, 1])
+batch_input = bcol1.text_input(
+    "候选股票代码（逗号分隔）",
+    "600000, 000001, 600519, 601318",
+    help="逐个跑机会引擎，输出按机会分排序的交易计划（过滤 AVOID）",
+)
+batch_account = bcol2.number_input("批量账户资金（元）", value=ACCOUNT, step=10_000)
+batch_run = bcol3.button("批量扫描", type="secondary", use_container_width=True)
+
+if batch_run:
+    codes = [c.strip() for c in batch_input.replace("，", ",").split(",") if c.strip()]
+    if not codes:
+        st.warning("请输入至少一个股票代码")
+    else:
+        with st.spinner(f"批量分析 {len(codes)} 只 ..."):
+            from quant_trading_system.stock_analysis.opportunity import OpportunityBatchScanner
+
+            engine = OpportunityEngine(
+                account_equity=batch_account,
+                regime_score=regime.score if regime else None,
+                market_factor=regime.factor if regime else 1.0,
+            )
+            scanner = OpportunityBatchScanner(engine=engine, workers=5)
+            res = scanner.scan(codes, market="CN")
+        if res.plans:
+            st.success(f"生成 {len(res.plans)} 个有效计划（AVOID 已过滤）")
+            rows = []
+            for p in res.plans:
+                rows.append({
+                    "决策": f"{p.get('decision_emoji','')} {p.get('decision','')}",
+                    "代码": p.get("code"),
+                    "名称": p.get("name"),
+                    "个股分": p.get("stock_score"),
+                    "机会分": p.get("opportunity_score"),
+                    "现价": p.get("current_price"),
+                    "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
+                    "止损": p.get("stop_loss"),
+                    "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
+                    "风险收益": f"1:{p.get('risk_reward_1')}",
+                    "仓位%": p.get("position_percent"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.warning("本轮无有效机会（可能全部 AVOID 或数据不足）")
+        if res.failed:
+            with st.expander(f"⚠️ {len(res.failed)} 只分析失败"):
+                for f in res.failed:
+                    st.write(f"- {f.get('name')}({f.get('code')}): {f.get('error')}")
+        st.caption(f"耗时 {res.elapsed:.1f}s")

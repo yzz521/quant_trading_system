@@ -14,17 +14,20 @@ small cloud VM). A ``--test`` flag fires one cycle immediately for sanity.
 from __future__ import annotations
 
 import json
-import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from ..utils import get_logger, load_yaml
-from .diagnosis import StockDiagnoser
-from .scanner import StockScanner
-from .notifier import Notifier, build_market_message
 from .ai_summary import generate_market_summary
+from .buy_power import annotate_list
+from .diagnosis import StockDiagnoser
+from .holdings import Holdings
+from .holdings_action import analyze_holding_actions
+from .notifier import Notifier, build_market_message
+from .opportunity import OpportunityBatchScanner, OpportunityEngine
+from .scanner import StockScanner
 from .vibe_bridge import (
     build_payload,
     enrich_payload,
@@ -33,9 +36,6 @@ from .vibe_bridge import (
     submit_secondary_analysis,
 )
 from .vibe_format import build_display_summary
-from .holdings import Holdings
-from .buy_power import annotate_list
-from .holdings_action import analyze_holding_actions
 
 try:
     from zoneinfo import ZoneInfo
@@ -116,6 +116,8 @@ class MarketScheduler:
         self.poll_interval = int(sched.get("poll_interval_sec", 60))
         self.daily_funnel_cfg = sched.get("daily_funnel") or {}
         self.weekly_cfg = sched.get("weekly_report") or {}
+        # V2 今日机会批量扫描（每日邮件中的交易计划区块）
+        self.opportunity_cfg = self.cfg.get("opportunity", {})
         # 启用的市场：只推送这些市场的分析，默认全部（CN/HK/US）
         raw_markets = self.cfg.get("enabled_markets") or ["CN", "HK", "US"]
         self.enabled_markets = [m.upper() for m in raw_markets
@@ -334,6 +336,37 @@ class MarketScheduler:
                 vibe_summary = None
 
 
+        # ---- V2 今日机会：批量交易计划（可选，失败不影响推送） ----
+        trading_plans = None
+        try:
+            opp_cfg = self.opportunity_cfg or {}
+            if opp_cfg.get("enabled", False):
+                # 候选源：优先用扫描命中，其次股票池
+                candidates = [h["code"] for h in (scan_hits or [])] or pool
+                max_stocks = int(opp_cfg.get("max_stocks", 15))
+                candidates = candidates[:max_stocks]
+                if candidates:
+                    log.info("[%s] 批量机会扫描 %d 只 ...", market, len(candidates))
+                    engine = OpportunityEngine(
+                        account_equity=float(opp_cfg.get("account_equity", 100_000)),
+                        regime_score=None,
+                        market_factor=1.0,
+                    )
+                    scanner = OpportunityBatchScanner(
+                        engine=engine,
+                        workers=int(opp_cfg.get("workers", 5)),
+                        min_opportunity_score=float(opp_cfg.get("min_opportunity_score", 0.0)),
+                    )
+                    bt_res = scanner.scan(candidates, market=market)
+                    trading_plans = bt_res.plans
+                    if bt_res.failed:
+                        log.warning("[%s] 机会扫描 %d 只失败: %s", market, len(bt_res.failed), [f["code"] for f in bt_res.failed])
+                    log.info("[%s] 机会扫描完成: %d 个有效计划（%.1fs）", market, len(trading_plans), bt_res.elapsed)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] V2 机会扫描跳过: %s", market, e)
+            trading_plans = None
+
+
         title, text, html = build_market_message(
             market, diagnoses, scan_hits,
             scan_enabled=bool(self.scan_cfg.get("enabled", False)),
@@ -342,6 +375,7 @@ class MarketScheduler:
             capital_snapshot=capital_snapshot,
             ai_summary=ai_summary,
             vibe_summary=vibe_summary,
+            trading_plans=trading_plans,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
