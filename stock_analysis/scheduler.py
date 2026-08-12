@@ -341,6 +341,17 @@ class MarketScheduler:
         try:
             opp_cfg = self.opportunity_cfg or {}
             if opp_cfg.get("enabled", False):
+                # 真实市场状态（指数失败时降级中性，不阻塞机会扫描）
+                regime = None
+                try:
+                    from .market import fetch_market_context
+
+                    mkt = fetch_market_context(
+                        str(opp_cfg.get("index_symbol") or "sh000001")
+                    )
+                    regime = mkt.get("regime")
+                except Exception as e:  # noqa: BLE001
+                    log.warning("[%s] 市场状态获取失败，机会扫描用中性: %s", market, e)
                 # 候选源：优先用扫描命中，其次股票池
                 candidates = [h["code"] for h in (scan_hits or [])] or pool
                 max_stocks = int(opp_cfg.get("max_stocks", 15))
@@ -349,8 +360,8 @@ class MarketScheduler:
                     log.info("[%s] 批量机会扫描 %d 只 ...", market, len(candidates))
                     engine = OpportunityEngine(
                         account_equity=float(opp_cfg.get("account_equity", 100_000)),
-                        regime_score=None,
-                        market_factor=1.0,
+                        regime_score=regime.score if regime else None,
+                        market_factor=regime.factor if regime else 1.0,
                     )
                     scanner = OpportunityBatchScanner(
                         engine=engine,

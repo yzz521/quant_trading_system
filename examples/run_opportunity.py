@@ -57,8 +57,16 @@ def main() -> None:
         df = add_all_indicators(raw)
         name = info.code
 
-    # 市场环境（未配置指数数据时给出中性状态，不阻塞分析）
+    # 市场环境（真实上证指数；失败时给出中性状态，不阻塞分析）
     regime = detect_market_regime(None)
+    try:
+        from quant_trading_system.stock_analysis.market import fetch_market_context
+
+        mkt = fetch_market_context("sh000001")
+        if mkt.get("regime") is not None:
+            regime = mkt["regime"]
+    except Exception:  # noqa: BLE001
+        pass
 
     engine = OpportunityEngine(
         account_equity=args.account,

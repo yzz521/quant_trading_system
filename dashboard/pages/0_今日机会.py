@@ -31,8 +31,7 @@ from quant_trading_system.stock_analysis.ai import explain_plan
 from quant_trading_system.stock_analysis.backtest import TradingPlanBacktest
 from quant_trading_system.stock_analysis.market import (
     calc_market_breadth,
-    calc_market_risk,
-    detect_market_regime,
+    fetch_market_context,
 )
 from quant_trading_system.stock_analysis.opportunity import OpportunityEngine
 from quant_trading_system.utils import load_yaml
@@ -48,7 +47,7 @@ ACCOUNT = 100_000  # 默认账户资金（元）
 # --------------------------------------------------------------------------- #
 st.subheader("📈 市场状态")
 try:
-    # 尝试用上证指数快照估算宽度；失败则降级为中性
+    # 真实指数（上证指数）→ 市场状态/风险；全市场快照 → 宽度
     spot = None
     try:
         from quant_trading_system.stock_analysis.data_fetcher import fetch_spot_snapshot
@@ -58,8 +57,10 @@ try:
         spot = None
 
     breadth = calc_market_breadth(spot) if spot is not None else None
-    regime = detect_market_regime(None)  # 未配置指数数据时为中性
-    risk = calc_market_risk(None)
+    # 指数失败时降级中性，不阻塞页面
+    mkt = fetch_market_context("sh000001")
+    regime = mkt.get("regime")
+    risk = mkt.get("risk")
 except Exception as e:  # noqa: BLE001
     st.warning(f"市场状态获取失败（不影响个股分析）: {e}")
     breadth, regime, risk = None, None, None
