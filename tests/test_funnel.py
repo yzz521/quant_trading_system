@@ -169,6 +169,52 @@ def test_news_risk_pass_penalizes_and_flags():
     assert not by["600002"].get("risk_flag")
 
 
+def test_news_risk_pass_sentiment():
+    f = _scanner(
+        news_enabled=True,
+        news_penalty=15,
+        news_risk_keywords=["减持", "诉讼"],
+    )
+    items = [{"code": "600001", "score": 50}]
+
+    def fake_news(code, days=7, limit=20, sources=None):
+        return [{"title": "600001 遭股东减持", "url": "http://x", "ctime": 0}]
+
+    out = f._news_risk_pass(items, news_fetcher=fake_news)
+    nr = out[0]["news_risks"][0]
+    assert nr["sentiment"] < 0
+    assert nr["sentiment_label"] == "偏空"
+
+
+def test_run_industry_cap_applied(monkeypatch):
+    spot = pd.DataFrame([
+        {"code": "600001", "name": "a", "close": 10.0, "pct_chg": 1.0,
+         "volume": 1e7, "amount": 8e7, "total_cap_yi": 100.0, "pe": 20.0, "turnover": 1.0},
+        {"code": "600002", "name": "b", "close": 10.0, "pct_chg": 1.0,
+         "volume": 1e7, "amount": 8e7, "total_cap_yi": 100.0, "pe": 20.0, "turnover": 1.0},
+    ])
+    monkeypatch.setattr(funnel_mod, "fetch_spot_snapshot", lambda: spot)
+    monkeypatch.setattr(funnel_mod, "fetch_tencent_quotes", lambda codes, batch=50: None)
+    monkeypatch.setattr(
+        funnel_mod, "fetch_industry_map",
+        lambda: {"600001": "银行", "600002": "银行"},
+    )
+
+    def fake_tech(self, codes, name_map=None):
+        return [{
+            "code": c, "name": (name_map or {}).get(c), "market": "CN",
+            "close": 10.0, "score": 50,
+        } for c in codes]
+
+    def fake_l4(self, tech, quote_map, holdings_mgr, held):
+        return tech
+
+    monkeypatch.setattr(FunnelScanner, "_technical_pass", fake_tech)
+    monkeypatch.setattr(FunnelScanner, "stage_l4", fake_l4)
+    out = _scanner(industry_diversify={"enabled": True, "max_per_industry": 1}).run()
+    assert [h["code"] for h in out["hits"]] == ["600001"]  # 同行业最多 1 只
+
+
 def test_news_risk_pass_disabled():
     f = _scanner(news_enabled=False)
     items = [{"code": "600001", "score": 50}]

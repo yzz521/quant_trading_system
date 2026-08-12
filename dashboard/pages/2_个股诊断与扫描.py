@@ -23,6 +23,11 @@ from quant_trading_system.stock_analysis import (
     StockDiagnoser, StockScanner, detect_market, fetch_kline,
     add_all_indicators, PRESETS,
 )
+from quant_trading_system.stock_analysis.data_fetcher import (
+    fetch_chip_distribution, fetch_industry_map,
+)
+from quant_trading_system.stock_analysis.indicators import explain_indicators
+from quant_trading_system.stock_analysis.industry import category_label, get_industry_category
 from quant_trading_system.stock_analysis.report import plot_kline
 
 
@@ -89,6 +94,36 @@ with tab_diag:
         ind_df = pd.DataFrame([result.indicators]).T.reset_index()
         ind_df.columns = ["指标", "数值"]
         st.dataframe(ind_df, use_container_width=True, hide_index=True)
+
+        lines = explain_indicators(result.indicators)
+        if lines:
+            st.subheader("指标解读")
+            for ln in lines:
+                st.markdown(f"- {ln}")
+
+        with st.expander("行业与筹码"):
+            try:
+                ind_map = fetch_industry_map()
+                z6 = str(result.code).zfill(6)
+                ind = ind_map.get(z6, "")
+                if ind:
+                    st.write(f"**行业**：{ind}（{category_label(get_industry_category(ind))}）")
+                else:
+                    st.caption("未找到该股行业（行业映射可能不完整）")
+            except Exception as e:
+                st.caption(f"行业映射不可用：{e}")
+            chip = fetch_chip_distribution(str(result.code))
+            if chip:
+                st.write("**筹码分布**（最新交易日）")
+                st.write(
+                    f"获利比例 {chip.get('profit_ratio')}% · "
+                    f"平均成本 {chip.get('avg_cost')}"
+                )
+                st.write(
+                    f"90% 成本区间 {chip.get('cost_90_low')} ~ {chip.get('cost_90_high')}"
+                )
+            else:
+                st.caption("筹码分布不可用（东财接口在当前网络可能被墙）")
 
         if result.fund_flow or result.valuation:
             cF, cV = st.columns(2)

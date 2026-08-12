@@ -32,9 +32,14 @@ funnel:
   l3_limit: 80              # L3 技术面后进入 L4 的候选数
   l3_conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"]
   l2_fallback_spot: true    # 腾讯行情失败时用新浪快照做 L2 过滤（避免漏斗中断）
+  industry_diversify:
+    enabled: true           # 行业分散：Top10 里同行业最多 N 只（新浪行业，7天缓存）
+    max_per_industry: 3
   # L4 新闻风险层：近7天新闻/公告标题命中关键词则降分并标注（如 000056 的诉讼公告）
   news_enabled: true
   news_sources: ["eastmoney", "xueqiu", "sina"]   # 多源顺序；单源失败自动跳过，新浪兜底
+  news_sentiment:
+    enabled: true           # 新闻标题情绪标注（偏多/偏空/中性）
   news_days: 7
   news_penalty: 15
   news_risk_keywords: ["诉讼", "立案", "减持", "质押", "冻结", "处罚", "违规", "问询",

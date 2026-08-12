@@ -27,6 +27,7 @@ from .notifier import Notifier, build_market_message
 from .ai_summary import generate_market_summary
 from .vibe_bridge import (
     build_payload,
+    enrich_payload,
     save_latest_scan,
     submit_llm_analysis,
     submit_secondary_analysis,
@@ -59,20 +60,21 @@ def _funnel_message(
     title = f"GP助手 · 收盘漏斗 Top{len(hits)} {now}"
     lines = [f"全市场 {total} 只，漏斗：{stat}（{elapsed:.0f}s）", ""]
     for i, h in enumerate(hits, 1):
+        ind = f" | 行业{h.get('industry')}" if h.get("industry") else ""
         lines.append(
             f"{i}. {h.get('code')} {h.get('name')} | {h.get('close')} "
-            f"({h.get('change_pct')}%) | 评分{h.get('score')}"
+            f"({h.get('change_pct')}%) | 评分{h.get('score')}{ind}"
         )
     rows = "".join(
-        "<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%%</td><td>%s</td></tr>"
+        "<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%%</td><td>%s</td><td>%s</td></tr>"
         % (i, h.get("code"), h.get("name"), h.get("close"),
-           h.get("change_pct"), h.get("score"))
+           h.get("change_pct"), h.get("score"), h.get("industry") or "")
         for i, h in enumerate(hits, 1)
     )
     html = (
         "<p>全市场 <b>%s</b> 只，漏斗：<b>%s</b>（%.0fs）</p>"
         "<table border='1' cellpadding='4' style='border-collapse:collapse'>"
-        "<tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th><th>评分</th></tr>"
+        "<tr><th>#</th><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th><th>评分</th><th>行业</th></tr>"
         "%s</table>"
     ) % (total, stat, elapsed, rows)
     return title, "\n".join(lines), html
@@ -274,6 +276,10 @@ class MarketScheduler:
                     candidates=(scan_hits or [])[: vibe_n],
                     market=market,
                 )
+                try:
+                    payload = enrich_payload(payload)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("[%s] payload 增强跳过: %s", market, e)
                 vres = None
                 if vibe_enabled:
                     try:

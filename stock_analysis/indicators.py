@@ -155,3 +155,106 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["roc"] = ROC(c, 12)
     out["vr"] = VR(v, 5)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# ADX 与文字化解读（解释逻辑移植自 ashare-analyzer，MIT, Copyright 2026 zwldarren；
+# 文案与 explain_indicators 为本项目编写）
+# --------------------------------------------------------------------------- #
+
+def ADX(high, low, close, period: int = 14) -> pd.Series:
+    """平均趋向指数 ADX(14)：衡量趋势强度，不区分方向。"""
+    h = pd.Series(high, dtype=float)
+    l = pd.Series(low, dtype=float)
+    c = pd.Series(close, dtype=float)
+    up_move = h.diff()
+    down_move = -l.diff()
+    plus_dm = pd.Series(
+        up_move.where((up_move > down_move) & (up_move > 0), 0.0), index=h.index
+    )
+    minus_dm = pd.Series(
+        down_move.where((down_move > up_move) & (down_move > 0), 0.0), index=l.index
+    )
+    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, min_periods=period).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, min_periods=period).mean() / atr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, min_periods=period).mean() / atr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
+    adx = dx.ewm(alpha=1 / period, min_periods=period).mean()
+    return adx
+
+
+def interpret_rsi(rsi: float) -> str:
+    """RSI 文字解读。"""
+    if rsi >= 80:
+        return "严重超买"
+    if rsi >= 70:
+        return "超买"
+    if rsi >= 50:
+        return "偏强"
+    if rsi >= 30:
+        return "偏弱"
+    if rsi >= 20:
+        return "超卖"
+    return "严重超卖"
+
+
+def interpret_stochastic(k: float, d: float) -> str:
+    """KDJ 文字解读。"""
+    if k >= 80 and d >= 80:
+        return "超买"
+    if k <= 20 and d <= 20:
+        return "超卖"
+    if k > d:
+        return "金叉偏多"
+    if k < d:
+        return "死叉偏空"
+    return "中性"
+
+
+def interpret_macd(histogram: float) -> str:
+    """MACD 柱状图文字解读。"""
+    if histogram > 0:
+        return "红柱（动能偏多）"
+    if histogram < 0:
+        return "绿柱（动能偏空）"
+    return "零轴（中性）"
+
+
+def interpret_adx(adx: float) -> str:
+    """ADX 趋势强度解读。"""
+    if adx >= 50:
+        return "极强趋势"
+    if adx >= 40:
+        return "很强趋势"
+    if adx >= 25:
+        return "强趋势"
+    if adx >= 20:
+        return "趋势酝酿"
+    return "无趋势/震荡"
+
+
+def _get(row, *keys):
+    for k in keys:
+        v = row.get(k)
+        if v is not None and not pd.isna(v):
+            return v
+    return None
+
+
+def explain_indicators(row) -> list[str]:
+    """把一行指标整理成中文解读列表（兼容 rsi12/RSI12 两种键名），供看板展示。"""
+    out: list[str] = []
+    rsi = _get(row, "rsi12", "RSI12")
+    if rsi is not None:
+        out.append(f"RSI(12)={rsi:.1f} · {interpret_rsi(float(rsi))}")
+    hist = _get(row, "macd_hist", "MACD_Hist")
+    if hist is not None:
+        out.append(f"MACD柱={hist:+.4f} · {interpret_macd(float(hist))}")
+    k, d = _get(row, "k", "K"), _get(row, "d", "D")
+    if k is not None and d is not None:
+        out.append(f"KDJ K={k:.1f} D={d:.1f} · {interpret_stochastic(float(k), float(d))}")
+    adx = _get(row, "adx", "ADX")
+    if adx is not None:
+        out.append(f"ADX={adx:.1f} · {interpret_adx(float(adx))}")
+    return out

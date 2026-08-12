@@ -133,14 +133,36 @@ def run_weekly_report(
 def report_email(report_path: Path, codes: list[str]) -> tuple[str, str, str]:
     """周报邮件正文：(title, text, html)。"""
     title = f"GP助手 · A股周报 {report_path.stem.split('_')[-1]}"
+    groups: dict[str, list[str]] = {}
+    try:
+        from quant_trading_system.stock_analysis.data_fetcher import fetch_industry_map
+        m = fetch_industry_map()
+        for c in codes:
+            ind = m.get(str(c).zfill(6), "")
+            if ind:
+                groups.setdefault(ind, []).append(c)
+    except Exception:  # noqa: BLE001
+        pass
+    industry_line = ""
+    if groups:
+        industry_line = "行业分布：" + "、".join(
+            f"{k}({len(v)})" for k, v in groups.items()
+        ) + "\n"
     text = (
         f"周报已生成（附件 PDF）：{report_path.name}\n"
         f"覆盖 {len(codes)} 只：{'、'.join(codes)}\n"
-        f"本地存档：{report_path}\n"
+        + industry_line
+        + f"本地存档：{report_path}\n"
     )
     html = (
         "<p>周报已生成（附件 PDF）：<b>%s</b></p>"
         "<p>覆盖 %d 只：%s</p>"
+        "%s"
         "<p style='color:#6b7280;font-size:12px'>本地存档：%s</p>"
-    ) % (report_path.name, len(codes), "、".join(codes), report_path)
+    ) % (
+        report_path.name, len(codes), "、".join(codes),
+        f"<p>行业分布：{'、'.join(f'{k}({len(v)})' for k, v in groups.items())}</p>"
+        if groups else "",
+        report_path,
+    )
     return title, text, html

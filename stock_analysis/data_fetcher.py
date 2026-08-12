@@ -512,3 +512,105 @@ def fetch_stock_news(
         if len(out) >= max(int(limit), 1):
             break
     return out
+
+
+def fetch_industry_map(
+    cache_path: Optional[str] = None,
+    max_age_days: int = 7,
+) -> dict[str, str]:
+    """新浪行业板块 → {6位代码: 行业名}，结果缓存 results/cache/industry.json。
+
+    首次约 1-2 分钟（49 个板块各一次请求）；缓存 7 天。失败返回部分映射。
+    """
+    import json
+    import re
+    import time
+    from pathlib import Path
+
+    cache = (
+        Path(cache_path)
+        if cache_path
+        else Path(__file__).resolve().parents[1] / "results" / "cache" / "industry.json"
+    )
+    try:
+        if cache.exists() and time.time() - cache.stat().st_mtime < max_age_days * 86400:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("mapping"):
+                return data["mapping"]
+    except Exception:  # noqa: BLE001
+        pass
+
+    _clear_proxy()
+    import akshare as ak
+
+    sectors: list[tuple[str, str]] = []  # (label, 板块名)
+    try:
+        df = ak.stock_sector_spot(indicator="新浪行业")
+        if {"label", "板块"}.issubset(df.columns):
+            sectors = [
+                (str(x), str(y)) for x, y in zip(df["label"].tolist(), df["板块"].tolist())
+            ]
+    except Exception as e:  # noqa: BLE001
+        log.warning("新浪行业板块列表获取失败: %s", e)
+
+    mapping: dict[str, str] = {}
+    for label, name in sectors:
+        try:
+            det = ak.stock_sector_detail(sector=label)
+            col = "代码" if "代码" in det.columns else (det.columns[0] if len(det.columns) else None)
+            if col is None:
+                continue
+            for v in det[col].astype(str):
+                m = re.search(r"(\d{6})", v)
+                if m:
+                    mapping[m.group(1)] = name
+        except Exception as e:  # noqa: BLE001
+            log.debug("行业 %s 成分获取失败: %s", name, e)
+
+    if mapping:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(
+                json.dumps({"as_of": int(time.time()), "mapping": mapping},
+                           ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return mapping
+
+
+def fetch_chip_distribution(code: str, timeout: int = 12) -> Optional[dict]:
+    """东财筹码分布（akshare）→ {date, profit_ratio, avg_cost, cost_90_low, cost_90_high}。
+
+    东财接口在当前网络可能不可用，失败返回 None（调用方优雅降级）。
+    """
+    try:
+        import concurrent.futures as _cf
+        import akshare as ak
+
+        _clear_proxy()
+        symbol = str(code).zfill(6)
+        prefix = "sh" if symbol.startswith("6") else "sz"
+        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+            df = ex.submit(ak.stock_cyq_em, symbol=f"{prefix}{symbol}").result(timeout=timeout)
+        if df is None or df.empty:
+            return None
+        row = df.iloc[-1]
+
+        def _num(x):
+            try:
+                return float(x)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {
+            "date": str(row.get("日期") or ""),
+            "profit_ratio": _num(row.get("获利比例")),
+            "avg_cost": _num(row.get("平均成本")),
+            "cost_90_low": _num(row.get("90成本-低")),
+            "cost_90_high": _num(row.get("90成本-高")),
+        }
+    except Exception as e:  # noqa: BLE001
+        log.debug("筹码分布不可用 %s: %s", code, e)
+        return None

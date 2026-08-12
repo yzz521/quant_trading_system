@@ -160,7 +160,20 @@ def _read_cookie(name: str = _COOKIE_NAME) -> Optional[str]:
 
 
 def _set_cookie(name: str, value: str, max_age: int) -> None:
-    """通过注入 JS 写入浏览器 Cookie（SameSite=Lax）。"""
+    """通过注入 JS 写入浏览器 Cookie（SameSite=Lax），供刷新/重开兜底恢复。
+
+    写入时机必须是"稳定渲染阶段"：components iframe 异步渲染，若在
+    ``st.rerun()`` 前渲染，rerun 会把它清除、JS 来不及执行导致 cookie 写不
+    进去。因此 cookie 的写入/删除都由 ``require_login`` 在稳定渲染分支统一
+    处理：登录成功经 rerun 回到"session 已有"分支时补写；登出经 rerun 后在
+    开头登出分支删除（见 ``require_login`` 注释）。
+
+    注意不要在此处做页面导航（如 ``location.replace``）：components iframe
+    的 sandbox 没有 ``allow-top-navigation``，对父窗口的导航会被浏览器静默
+    阻止。URL 参数 token 由 ``_set_query_token`` 负责；Streamlit 1.37.x 在
+    widget 触发的 rerun 中该更新消息可能丢失（URL 不带 token），此时刷新由
+    本 cookie 兜底恢复。
+    """
     # 转义
     safe_val = value.replace("\\", "").replace('"', "").replace(";", "")
     safe_name = name.replace("\\", "").replace('"', "").replace(";", "")
@@ -259,16 +272,36 @@ def require_login(page_title: str = "量化交易系统") -> bool:
     if not cfg.get("enabled"):
         return True
 
+    # 0) 登出处理：清会话状态并在本 run 稳定渲染阶段删 cookie。
+    #    _clear_cookie 的 components iframe 若在 st.rerun() 前渲染会被清除
+    #    （JS 来不及执行、cookie 删不掉，刷新后又被 cookie 恢复登录），
+    #    所以登出标记经 st.rerun() 后在这里统一处理，本 run 不再有 rerun。
+    skip_cookie_restore = False
+    if st.session_state.pop("_logout_requested", None):
+        st.session_state.pop("auth_user", None)
+        st.session_state.pop("auth_token", None)
+        st.session_state.pop("auth_from_cookie", None)
+        _clear_query_token()
+        _clear_cookie(_COOKIE_NAME)
+        skip_cookie_restore = True
+
     # 1) session 已有
     if st.session_state.get("auth_user"):
+        # 登录成功经 st.rerun() 后回到这里；在此稳定渲染阶段补写 cookie，
+        # 避免在 rerun 前写（components iframe 会被 rerun 清除，JS 来不及
+        # 执行导致 cookie 写不进去）。cookie 恢复的会话无需重写（token 为空）。
+        _auth_token = st.session_state.get("auth_token")
+        if _auth_token:
+            _set_cookie(_COOKIE_NAME, _auth_token, _ttl_seconds(cfg))
         _sidebar_user(cfg)
         return True
 
     # 2) cookie 恢复
-    user = _restore_session(cfg)
-    if user:
-        _sidebar_user(cfg)
-        return True
+    if not skip_cookie_restore:
+        user = _restore_session(cfg)
+        if user:
+            _sidebar_user(cfg)
+            return True
 
     # 3) 登录表单
     left, mid, right = st.columns([1, 1.2, 1])
@@ -297,8 +330,10 @@ def require_login(page_title: str = "量化交易系统") -> bool:
                 token, max_age = make_token(username.strip(), cfg)
                 st.session_state["auth_user"] = username.strip()
                 st.session_state["auth_token"] = token
+                # 不在此处写 cookie：st.rerun() 会清除刚渲染的 components
+                # iframe，cookie 写不进去；改由 rerun 后的"session 已有"分支
+                # 在稳定渲染阶段补写（见 _set_cookie 注释）。
                 _set_query_token(token)
-                _set_cookie(_COOKIE_NAME, token, max_age)
                 st.success("登录成功，正在进入…")
                 st.rerun()
             st.error("用户名或密码错误")
@@ -313,5 +348,7 @@ def _sidebar_user(cfg: dict) -> None:
         ttl_h = _ttl_seconds(cfg) // 3600
         st.caption(f"会话约 {ttl_h}h · 刷新保持登录")
         if st.button("退出登录", key="logout_btn"):
-            logout()
+            # 不在 rerun 前直接删 cookie（iframe 会被 rerun 清除导致删不掉），
+            # 改为设置标记，由 require_login 开头在稳定渲染阶段统一处理。
+            st.session_state["_logout_requested"] = True
             st.rerun()

@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>quant_trading_system V2 开发计划</title>
+<style>
+:root {
+    --bg: #f5f7fb;
+    --card: #ffffff;
+    --text: #182230;
+    --muted: #667085;
+    --line: #e4e7ec;
+    --primary: #2563eb;
+    --primary-soft: #eff6ff;
+    --green: #16a34a;
+    --green-soft: #ecfdf3;
+    --orange: #ea580c;
+    --orange-soft: #fff7ed;
+    --red: #dc2626;
+    --red-soft: #fef2f2;
+    --purple: #7c3aed;
+    --purple-soft: #f5f3ff;
+    --shadow: 0 10px 30px rgba(16, 24, 40, .06);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "PingFang SC",
+        "Microsoft YaHei",
+        sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.7;
+}
+
+.container {
+    width: min(1180px, calc(100% - 40px));
+    margin: 0 auto;
+}
+
+.hero {
+    background:
+        radial-gradient(circle at 80% 20%, rgba(37,99,235,.22), transparent 35%),
+        linear-gradient(135deg, #101828, #172554);
+    color: white;
+    padding: 72px 0 64px;
+}
+
+.hero .eyebrow {
+    color: #93c5fd;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+
+.hero h1 {
+    font-size: clamp(34px, 5vw, 56px);
+    line-height: 1.15;
+    margin: 14px 0 18px;
+    letter-spacing: -.03em;
+}
+
+.hero p {
+    max-width: 760px;
+    color: #cbd5e1;
+    font-size: 18px;
+    margin: 0;
+}
+
+.hero-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 28px;
+}
+
+.badge {
+    padding: 7px 13px;
+    border: 1px solid rgba(255,255,255,.18);
+    background: rgba(255,255,255,.08);
+    border-radius: 999px;
+    font-size: 13px;
+}
+
+main {
+    padding: 38px 0 80px;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 26px;
+}
+
+.card.full {
+    grid-column: 1 / -1;
+}
+
+.card h2 {
+    margin: 0 0 16px;
+    font-size: 22px;
+}
+
+.card h3 {
+    margin: 24px 0 10px;
+    font-size: 17px;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.callout {
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    padding: 16px 18px;
+    border-radius: 0 12px 12px 0;
+}
+
+.callout.green {
+    border-color: var(--green);
+    background: var(--green-soft);
+}
+
+.callout.orange {
+    border-color: var(--orange);
+    background: var(--orange-soft);
+}
+
+.callout.red {
+    border-color: var(--red);
+    background: var(--red-soft);
+}
+
+code {
+    font-family: "SFMono-Regular", Consolas, monospace;
+    background: #f2f4f7;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: .9em;
+}
+
+pre {
+    background: #101828;
+    color: #e5e7eb;
+    padding: 20px;
+    border-radius: 14px;
+    overflow-x: auto;
+    line-height: 1.6;
+    font-size: 13px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+}
+
+th,
+td {
+    border-bottom: 1px solid var(--line);
+    padding: 11px 12px;
+    text-align: left;
+}
+
+th {
+    background: #f8fafc;
+    font-size: 13px;
+}
+
+td {
+    font-size: 14px;
+}
+
+.score-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    margin-top: 18px;
+}
+
+.score-box {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px;
+}
+
+.score-box.stock {
+    background: linear-gradient(180deg, #eff6ff, #fff);
+}
+
+.score-box.opportunity {
+    background: linear-gradient(180deg, #f5f3ff, #fff);
+}
+
+.score-title {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.score-question {
+    color: var(--muted);
+    margin: 5px 0 14px;
+}
+
+.score-number {
+    font-size: 38px;
+    font-weight: 800;
+}
+
+.flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 18px 0;
+}
+
+.flow-item {
+    background: #f8fafc;
+    border: 1px solid var(--line);
+    padding: 9px 13px;
+    border-radius: 10px;
+    font-size: 13px;
+}
+
+.arrow {
+    color: #98a2b3;
+}
+
+.phase {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 18px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.phase:last-child {
+    border-bottom: 0;
+}
+
+.phase-label {
+    font-weight: 800;
+    color: var(--primary);
+}
+
+.phase-title {
+    font-weight: 700;
+    font-size: 16px;
+}
+
+.phase ul {
+    margin-bottom: 0;
+}
+
+.checklist {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.checklist li {
+    padding: 9px 0;
+    border-bottom: 1px solid #f2f4f7;
+}
+
+.checklist li::before {
+    content: "☐";
+    margin-right: 9px;
+    color: var(--primary);
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.status {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+}
+
+.status strong {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.status.buy {
+    background: var(--green-soft);
+}
+
+.status.wait {
+    background: var(--orange-soft);
+}
+
+.status.sell {
+    background: var(--red-soft);
+}
+
+.footer {
+    color: var(--muted);
+    text-align: center;
+    padding: 30px 0 50px;
+    font-size: 13px;
+}
+
+@media (max-width: 800px) {
+    .grid,
+    .score-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .phase {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+
+    .status-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<header class="hero">
+<div class="container">
+    <div class="eyebrow">quant_trading_system / V2</div>
+
+    <h1>从量化交易系统<br>转向股票决策助手</h1>
+
+    <p>
+        每天自动筛选值得关注的股票，并给出合理买入区间、
+        止损价格、目标价格、风险收益比和建议仓位。
+    </p>
+
+    <div class="hero-meta">
+        <span class="badge">基线：main</span>
+        <span class="badge">开发分支：main-v2</span>
+        <span class="badge">核心：Trading Plan</span>
+        <span class="badge">AI + Quant</span>
+    </div>
+</div>
+</header>
+
+<main>
+<div class="container">
+
+<div class="grid">
+
+<section class="card full">
+<h2>01 · 项目重新定位</h2>
+
+<div class="callout">
+<strong>V2 核心目标：</strong>
+每天自动从 A 股市场筛选值得关注的股票，并告诉用户：
+为什么关注、什么价格可以买、什么价格止损、什么价格卖、当前应该买还是等待。
+</div>
+
+<h3>V2 不再以自动交易为核心</h3>
+
+<p class="muted">
+Broker、Paper Trading、Event Engine 等能力可以保留，
+但它们降级为底层基础设施，而不是项目核心。
+</p>
+
+<div class="flow">
+<div class="flow-item">全市场</div>
+<span class="arrow">→</span>
+<div class="flow-item">候选股票</div>
+<span class="arrow">→</span>
+<div class="flow-item">股票评分</div>
+<span class="arrow">→</span>
+<div class="flow-item">交易机会</div>
+<span class="arrow">→</span>
+<div class="flow-item">买卖价格</div>
+<span class="arrow">→</span>
+<div class="flow-item">Trading Plan</div>
+<span class="arrow">→</span>
+<div class="flow-item">AI解释</div>
+</div>
+</section>
+
+<section class="card">
+<h2>02 · Git 分支策略</h2>
+
+<h3>main</h3>
+
+<p>
+当前 <code>main</code> 作为 V1 稳定基线，不再进行 V2 功能开发。
+</p>
+
+<pre>main
+Commit:
+05c732748a7f931179e23323de8be7ffda98d66d</pre>
+
+<h3>创建 main-v2</h3>
+
+<pre>git fetch origin
+
+git checkout main
+git pull --ff-only origin main
+
+git checkout -b main-v2
+git push -u origin main-v2</pre>
+
+<div class="callout green">
+<strong>原则：</strong>
+main 是 V1 稳定版本，main-v2 是 V2 主开发分支。
+</div>
+</section>
+
+<section class="card">
+<h2>03 · main 分支保护</h2>
+
+<p>GitHub → Settings → Branches → Branch protection。</p>
+
+<ul>
+<li>Require a pull request before merging</li>
+<li>Require approvals</li>
+<li>Require status checks</li>
+<li>Require conversation resolution</li>
+<li>禁止 force push</li>
+<li>禁止删除 main</li>
+</ul>
+
+<pre>main
+ ↓
+V1 稳定版本
+ ↓
+禁止直接开发
+
+main-v2
+ ↓
+V2 主开发
+
+feature/*
+ ↓
+V2 功能开发</pre>
+</section>
+
+<section class="card full">
+<h2>04 · V2 核心架构</h2>
+
+<div class="flow">
+<div class="flow-item">全市场</div>
+<span class="arrow">→</span>
+<div class="flow-item">Universe Filter</div>
+<span class="arrow">→</span>
+<div class="flow-item">Funnel</div>
+<span class="arrow">→</span>
+<div class="flow-item">Candidate Pool</div>
+<span class="arrow">→</span>
+<div class="flow-item">Stock Score</div>
+<span class="arrow">→</span>
+<div class="flow-item">Opportunity Score</div>
+<span class="arrow">→</span>
+<div class="flow-item">Opportunity Engine</div>
+<span class="arrow">→</span>
+<div class="flow-item">Trading Plan</div>
+<span class="arrow">→</span>
+<div class="flow-item">AI Analyst</div>
+</div>
+</section>
+
+<section class="card full">
+<h2>05 · 两套评分体系</h2>
+
+<div class="score-grid">
+
+<div class="score-box stock">
+<div class="score-title">Stock Score</div>
+<div class="score-question">回答：这只股票本身怎么样？</div>
+<div class="score-number">0–100</div>
+
+<table>
+<tr><th>因素</th><th>权重</th></tr>
+<tr><td>基本面质量</td><td>20%</td></tr>
+<tr><td>技术趋势</td><td>25%</td></tr>
+<tr><td>资金面</td><td>15%</td></tr>
+<tr><td>估值</td><td>10%</td></tr>
+<tr><td>市场环境</td><td>10%</td></tr>
+<tr><td>风险</td><td>20%</td></tr>
+</table>
+</div>
+
+<div class="score-box opportunity">
+<div class="score-title">Opportunity Score</div>
+<div class="score-question">回答：现在这个价格值不值得交易？</div>
+<div class="score-number">0–100</div>
+
+<table>
+<tr><th>因素</th><th>权重</th></tr>
+<tr><td>当前价格位置</td><td>20%</td></tr>
+<tr><td>支撑强度</td><td>15%</td></tr>
+<tr><td>趋势状态</td><td>15%</td></tr>
+<tr><td>买入距离</td><td>15%</td></tr>
+<tr><td>风险收益比</td><td>20%</td></tr>
+<tr><td>波动率</td><td>5%</td></tr>
+<tr><td>历史类似走势</td><td>10%</td></tr>
+</table>
+</div>
+
+</div>
+
+<div class="callout orange" style="margin-top:18px;">
+<strong>关键区别：</strong>
+好股票不一定等于现在可以买。
+V2 必须同时判断“股票质量”和“当前交易机会”。
+</div>
+</section>
+
+<section class="card">
+<h2>06 · Opportunity Engine</h2>
+
+<p>新增核心目录：</p>
+
+<pre>stock_analysis/opportunity/
+├── opportunity_engine.py
+├── entry_price.py
+├── exit_price.py
+├── support_resistance.py
+├── risk_reward.py
+├── position_sizing.py
+└── trading_plan.py</pre>
+
+<p>
+这是 V2 最核心的新模块。
+</p>
+</section>
+
+<section class="card">
+<h2>07 · Entry Price</h2>
+
+<p>买入价不能简单使用固定比例计算。</p>
+
+<p>输入：</p>
+
+<ul>
+<li>当前价格</li>
+<li>MA5 / MA20 / MA60</li>
+<li>前高 / 前低</li>
+<li>支撑位 / 压力位</li>
+<li>ATR</li>
+<li>Bollinger</li>
+<li>成交量</li>
+<li>突破位置</li>
+<li>成交密集区</li>
+</ul>
+
+<pre>当前价格：12.36
+
+理想买入：11.80
+标准买入：11.95
+激进买入：12.10
+
+买入区间：
+11.80 ~ 12.10</pre>
+</section>
+
+<section class="card">
+<h2>08 · Stop Loss</h2>
+
+<p>止损来源：</p>
+
+<ul>
+<li>结构止损</li>
+<li>ATR 止损</li>
+<li>支撑位止损</li>
+<li>固定风险止损</li>
+</ul>
+
+<pre>买入：11.95
+
+关键支撑：11.42
+ATR 止损：11.38
+
+最终止损：11.35</pre>
+</section>
+
+<section class="card">
+<h2>09 · Target Price</h2>
+
+<p>至少支持三个目标价：</p>
+
+<pre>买入：11.95
+止损：11.35
+
+目标1：13.20
+目标2：14.50
+目标3：15.80</pre>
+
+<p>同时计算：</p>
+
+<pre>expected_return
+risk_reward
+max_loss</pre>
+</section>
+
+<section class="card full">
+<h2>10 · Trading Plan</h2>
+
+<pre>{
+  "code": "...",
+  "name": "...",
+
+  "decision": "BUY_ON_PULLBACK",
+
+  "stock_score": 91,
+  "opportunity_score": 94,
+
+  "current_price": 12.36,
+
+  "entry_low": 11.80,
+  "entry_price": 11.95,
+  "entry_high": 12.10,
+
+  "stop_loss": 11.35,
+
+  "target_1": 13.20,
+  "target_2": 14.50,
+  "target_3": 15.80,
+
+  "risk_reward_1": 2.08,
+  "risk_reward_2": 4.25,
+
+  "position_percent": 20,
+
+  "holding_period": "5~20 trading days",
+
+  "confidence": 0.87
+}</pre>
+</section>
+
+<section class="card full">
+<h2>11 · 决策状态</h2>
+
+<div class="status-grid">
+
+<div class="status buy">
+<strong>🟢 BUY_NOW</strong>
+当前价格已经进入合理买入区域。
+</div>
+
+<div class="status buy">
+<strong>🟢 BUY_ON_PULLBACK</strong>
+股票不错，但当前价格偏高，等待回调。
+</div>
+
+<div class="status wait">
+<strong>🟡 WATCH</strong>
+值得观察，但交易条件尚未成立。
+</div>
+
+<div class="status wait">
+<strong>🟠 HOLD</strong>
+已经持有，继续观察持仓逻辑。
+</div>
+
+<div class="status sell">
+<strong>🔴 SELL</strong>
+达到目标位或交易逻辑失效。
+</div>
+
+<div class="status sell">
+<strong>⛔ AVOID</strong>
+风险过高，不进入交易候选池。
+</div>
+
+</div>
+</section>
+
+<section class="card">
+<h2>12 · Funnel 定位</h2>
+
+<p>
+现有 Funnel 不删除，但定位调整为：
+<strong>Candidate Generator</strong>
+</p>
+
+<pre>L1 流动性
+   ↓
+L2 基本质量
+   ↓
+L3 技术面
+   ↓
+L4 资金 + 新闻风险
+   ↓
+Candidate Pool</pre>
+
+<p class="muted">
+Funnel 负责筛选候选股票，不负责最终买卖决策。
+</p>
+</section>
+
+<section class="card">
+<h2>13 · Risk / Reward</h2>
+
+<pre>买入：11.95
+止损：11.35
+目标：13.20
+
+风险 = 11.95 - 11.35
+收益 = 13.20 - 11.95</pre>
+
+<table>
+<tr><th>RR</th><th>判断</th></tr>
+<tr><td>&lt; 1.5</td><td>不推荐</td></tr>
+<tr><td>1.5 ~ 2.0</td><td>可观察</td></tr>
+<tr><td>2.0 ~ 3.0</td><td>较好</td></tr>
+<tr><td>&gt; 3.0</td><td>优秀</td></tr>
+</table>
+</section>
+
+<section class="card">
+<h2>14 · 仓位建议</h2>
+
+<p>
+用户输入账户资产，例如：
+</p>
+
+<pre>账户：10,000 元</pre>
+
+<p>系统计算：</p>
+
+<pre>最大允许亏损
+      ↓
+每股最大风险
+      ↓
+最大股数
+      ↓
+建议仓位</pre>
+
+<div class="callout red">
+单只股票不能无限加仓。
+仓位必须与止损距离和账户风险绑定。
+</div>
+</section>
+
+<section class="card">
+<h2>15 · 市场环境</h2>
+
+<pre>stock_analysis/market/
+├── market_regime.py
+├── market_breadth.py
+└── market_risk.py</pre>
+
+<p>市场状态：</p>
+
+<pre>BULL
+NEUTRAL
+BEAR
+HIGH_RISK</pre>
+
+<p>
+市场环境影响 Opportunity Score 和 Position Size。
+</p>
+</section>
+
+<section class="card full">
+<h2>16 · AI 的正确定位</h2>
+
+<div class="callout">
+<strong>AI 不负责直接决定买卖价格。</strong>
+</div>
+
+<div class="flow">
+<div class="flow-item">行情数据</div>
+<span class="arrow">→</span>
+<div class="flow-item">量化计算</div>
+<span class="arrow">→</span>
+<div class="flow-item">Trading Plan</div>
+<span class="arrow">→</span>
+<div class="flow-item">AI</div>
+<span class="arrow">→</span>
+<div class="flow-item">自然语言解释</div>
+</div>
+
+<p>AI 主要负责：</p>
+
+<ul>
+<li>为什么值得关注</li>
+<li>为什么现在可以买 / 不能买</li>
+<li>买入逻辑</li>
+<li>主要风险</li>
+<li>失效条件</li>
+<li>已经持有时怎么办</li>
+</ul>
+</section>
+
+<section class="card full">
+<h2>17 · 历史回测</h2>
+
+<p>
+V2 必须回答：
+<strong>这套买入、止损、目标价规则历史上是否有效？</strong>
+</p>
+
+<table>
+<tr>
+<th>指标</th>
+<th>说明</th>
+</tr>
+<tr><td>样本数量</td><td>历史交易计划数量</td></tr>
+<tr><td>买入区间命中率</td><td>价格进入 Entry Zone 的比例</td></tr>
+<tr><td>止损触发率</td><td>交易逻辑失败比例</td></tr>
+<tr><td>目标1触达率</td><td>达到第一目标比例</td></tr>
+<tr><td>目标2触达率</td><td>达到第二目标比例</td></tr>
+<tr><td>胜率</td><td>盈利交易比例</td></tr>
+<tr><td>平均收益</td><td>平均交易收益</td></tr>
+<tr><td>最大回撤</td><td>策略最大历史回撤</td></tr>
+<tr><td>平均持仓</td><td>平均持仓交易日</td></tr>
+</table>
+
+<div class="callout red">
+<strong>硬性要求：</strong>
+严格防止未来函数。
+不能使用未来价格、未来财务数据、未来新闻等信息。
+</div>
+</section>
+
+<section class="card full">
+<h2>18 · 每日运行流程</h2>
+
+<div class="flow">
+<div class="flow-item">① 全市场行情</div>
+<span class="arrow">→</span>
+<div class="flow-item">② 基础过滤</div>
+<span class="arrow">→</span>
+<div class="flow-item">③ Funnel</div>
+<span class="arrow">→</span>
+<div class="flow-item">④ Top 50~100</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑤ Stock Score</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑥ Opportunity Score</div>
+</div>
+
+<div class="flow">
+<div class="flow-item">⑦ Entry</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑧ Stop</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑨ Target</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑩ RR</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑪ Position</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑫ Trading Plan</div>
+<span class="arrow">→</span>
+<div class="flow-item">⑬ AI</div>
+</div>
+</section>
+
+<section class="card">
+<h2>19 · V2 项目结构</h2>
+
+<pre>quant_trading_system/
+│
+├── stock_analysis/
+│   ├── data/
+│   ├── indicators/
+│   ├── patterns/
+│   ├── scanner/
+│   ├── funnel/
+│   │
+│   ├── scoring/
+│   │   ├── stock_score.py
+│   │   ├── opportunity_score.py
+│   │   └── score_components.py
+│   │
+│   ├── opportunity/
+│   │   ├── opportunity_engine.py
+│   │   ├── entry_price.py
+│   │   ├── exit_price.py
+│   │   ├── support_resistance.py
+│   │   ├── risk_reward.py
+│   │   ├── position_sizing.py
+│   │   └── trading_plan.py
+│   │
+│   ├── market/
+│   ├── backtest/
+│   ├── ai/
+│   └── portfolio/
+│
+├── dashboard/
+├── tests/
+└── docs/</pre>
+</section>
+
+<section class="card">
+<h2>20 · 开发阶段</h2>
+
+<div class="phase">
+<div class="phase-label">Phase 0</div>
+<div>
+<div class="phase-title">V2 基线</div>
+建立 main-v2、锁定 main、建立测试基线。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 1</div>
+<div>
+<div class="phase-title">评分体系</div>
+Stock Score + Opportunity Score。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 2</div>
+<div>
+<div class="phase-title">买入价格</div>
+支撑压力 + Entry Zone。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 3</div>
+<div>
+<div class="phase-title">止损 + 目标价</div>
+Stop Loss + Target Price + Risk/Reward。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 4</div>
+<div>
+<div class="phase-title">Trading Plan</div>
+统一交易计划和 BUY/WATCH/SELL 状态。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 5</div>
+<div>
+<div class="phase-title">仓位管理</div>
+账户风险 + 最大亏损 + 建议股数。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 6</div>
+<div>
+<div class="phase-title">历史回测</div>
+验证买卖规则是否有效。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 7</div>
+<div>
+<div class="phase-title">AI Analyst</div>
+AI 解释量化结果。
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-label">Phase 8</div>
+<div>
+<div class="phase-title">Dashboard V2</div>
+围绕每日投资决策重新设计首页。
+</div>
+</div>
+</section>
+
+<section class="card">
+<h2>21 · 开发优先级</h2>
+
+<pre>P0  Trading Plan 核心
+
+P1  选股 + 买入 + 止损 + 目标价
+
+P2  历史回测
+
+P3  AI 分析
+
+P4  Dashboard
+
+P5  Paper Trading
+
+P6  自动交易</pre>
+
+<div class="callout orange">
+在 Trading Plan 没有经过历史验证之前，
+不继续扩展自动交易能力。
+</div>
+</section>
+
+<section class="card full">
+<h2>22 · 第一批实际开发任务</h2>
+
+<ul class="checklist">
+<li>建立 V2 分支和保护规则</li>
+<li>建立 V2 开发文档</li>
+<li>梳理现有 scanner / funnel / diagnosis / sell_zone</li>
+<li>建立 Stock Score</li>
+<li>建立 Opportunity Score</li>
+<li>建立 Support / Resistance Engine</li>
+<li>建立 Entry Price Engine</li>
+<li>建立 Stop Loss Engine</li>
+<li>建立 Target Price Engine</li>
+<li>建立 Risk / Reward Engine</li>
+<li>建立 TradingPlan</li>
+<li>建立 Position Sizing</li>
+<li>建立 Trading Plan Backtest</li>
+<li>接入 AI Analyst</li>
+<li>重做 Dashboard</li>
+</ul>
+</section>
+
+<section class="card full">
+<h2>23 · Definition of Done</h2>
+
+<ul class="checklist">
+<li>可以扫描全市场</li>
+<li>可以得到候选股票 Top N</li>
+<li>每只股票有 Stock Score</li>
+<li>每只股票有 Opportunity Score</li>
+<li>每只股票有买入区间</li>
+<li>每只股票有止损</li>
+<li>每只股票至少有两个目标价</li>
+<li>有风险收益比</li>
+<li>有建议仓位</li>
+<li>有 BUY_NOW / BUY_ON_PULLBACK / WATCH 等状态</li>
+<li>有历史回测</li>
+<li>无未来函数</li>
+<li>AI 可以解释结果</li>
+<li>Dashboard 可以直接查看每日机会</li>
+<li>原有 main 不被破坏</li>
+</ul>
+</section>
+
+<section class="card full">
+<h2>24 · 最重要的产品原则</h2>
+
+<div class="callout green">
+<h3 style="margin-top:0;">
+量化模型负责计算，AI 负责解释，回测负责验证，系统负责整理，用户负责最终决策。
+</h3>
+
+<p style="margin-bottom:0;">
+V2 不追求“自动帮用户炒股”，而是追求：
+<strong>让用户每天知道应该看什么、为什么看、什么价格买、买多少、什么时候止损、什么时候卖。</strong>
+</p>
+</div>
+</section>
+
+<section class="card full">
+<h2>25 · 最终产品形态</h2>
+
+<pre>
+              今日市场
+
+市场状态：🟢 偏多
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔥 今日重点
+
+① XXX
+
+Stock Score        92
+Opportunity Score  94
+
+当前价格           12.36
+买入区间           11.80 ~ 12.10
+止损               11.35
+目标1              13.20
+目标2              14.50
+
+风险收益比         1 : 2.08
+
+建议：
+🟢 BUY_ON_PULLBACK
+
+理由：
+股票趋势良好，但当前价格略高，
+等待回调至买入区间。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+② XXX
+...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+我的持仓
+
+XXX    +8.2%    🟢 HOLD
+XXX    -2.1%    🟡 WATCH
+XXX   +16.4%    🔴 SELL
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+</pre>
+</section>
+
+<section class="card full">
+<h2>26 · V2 最终定位</h2>
+
+<div class="callout">
+<h3 style="margin-top:0;">
+股票筛选 + 买卖价格 + 风险收益比 + 仓位建议 + AI 解释的个人投资决策系统
+</h3>
+
+<p>
+最终不是告诉用户：
+“RSI 是 63，MACD 金叉，布林带中轨……”
+</p>
+
+<p>
+而是告诉用户：
+<strong>
+“这只股票值得关注；现在不要追高；
+如果回调到 11.80~12.10，可以考虑；
+11.35 跌破后交易逻辑失效；
+第一目标 13.20，第二目标 14.50。”
+</strong>
+</p>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+
+<footer class="footer">
+quant_trading_system · V2 Development Plan · 2026
+</footer>
+
+</body>
+</html>
