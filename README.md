@@ -1,6 +1,6 @@
 # quant_trading_system
 
-事件驱动的多市场量化交易框架，并附带 **A 股个人持仓助手**（卖出区间、诊断、定时推送）。
+事件驱动的多市场量化交易框架，并附带 **A 股个人持仓助手**（卖出区间、诊断、定时推送）与 **V2 交易决策助手**（每日机会、交易计划、回测验证、AI 解读）。
 
 - **License**: MIT  
 - **Python**: ≥ 3.10  
@@ -14,6 +14,7 @@
 |------|--------|--------|
 | **A. 量化框架** | 数据 → 策略 → 风控 → 回测 / Paper | `examples/backtest_demo.py`、`BacktestEngine` |
 | **B. A 股助手** | 持仓 SQLite、卖出区间、诊断扫描、邮件推送 | `python deploy/ctl.py start-all` → http://localhost:8502 |
+| **C. V2 交易决策助手** | 每日机会：评分 → 机会引擎 → 交易计划 → 历史回测 → AI 解读 | 看板「今日机会」页、`examples/run_opportunity.py` |
 
 助手用于研究与决策辅助，**不会自动下真实订单**。CTP / IBKR / Binance 等实盘适配器默认仍是骨架（`NotImplementedError`），需自行接 SDK，见 [`docs/LIVE_BROKERS.md`](docs/LIVE_BROKERS.md)。
 
@@ -126,7 +127,12 @@ quant_trading_system/
 ├── execution/         # PaperBroker、LiveEngine、LiveBarPoller、券商骨架
 ├── analytics/         # 绩效指标、基准对比、HTML 报告
 ├── stock_analysis/    # 持仓 DB、卖出区间、诊断、扫描、调度推送
-├── dashboard/         # Streamlit 多页：首页 + 持仓 / 诊断 / 研究工具
+│   ├── scoring/       # V2: Stock Score + Opportunity Score
+│   ├── opportunity/   # V2: 支撑阻力/入场/止损/目标/RR/仓位/TradingPlan/机会引擎
+│   ├── market/        # V2: 市场状态(BULL/NEUTRAL/BEAR/HIGH_RISK)/宽度/风险
+│   ├── backtest/      # V2: Trading Plan 历史回测（防 look-ahead）
+│   └── ai/            # V2: AI 分析师（量化结果 → 自然语言，只解释不定价）
+├── dashboard/         # Streamlit 多页：首页 + 持仓 / 诊断 / 研究工具 / V2 今日机会
 ├── deploy/            # ctl.py / ctl.sh / ctl.ps1 / ctl.bat
 ├── examples/
 ├── config/            # settings、*.yaml.example（勿提交真实密钥）
@@ -195,6 +201,27 @@ analyze_sell_zone({"code": "002269", "cost_price": 3.595})
 python examples/paper_loop_demo.py
 python examples/paper_poll_demo.py --seconds 5
 ```
+
+### V2 交易决策（每日机会）
+
+```bash
+# 单票完整交易计划（联网，默认 600000）
+python examples/run_opportunity.py 600000 --account 100000
+
+# 离线演示（合成数据）
+python examples/run_opportunity.py --synthetic --account 100000
+
+# 历史规则回测（验证入场/止损/目标是否有效，防 look-ahead）
+python examples/run_backtest_plan.py 600000 --days 750
+python examples/run_backtest_plan.py --synthetic
+```
+
+- 双评分：`Stock Score`（个股质量，6 维加权）+ `Opportunity Score`（当前是否可交易，7 维加权）
+- 交易计划：入场区间（理想/标准/激进）、止损（结构/ATR/支撑/固定风险取最严）、三档目标价、风险收益比、建议仓位（账户风险 × 止损距离，单票 ≤20%）
+- 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）
+- AI 解读：TradingPlan → 自然语言（为何关注/能否买/入场逻辑/风险/失效条件），**AI 只解释不定价**
+- 看板入口：`dashboard/pages/0_今日机会.py`（市场状态 + 交易计划 + AI + 回测）
+- 计划书：`docs/quant_trading_system_v2_dev_plan_en.md`（中英双语），V2 开发在 `main-v2` 分支
 
 ---
 
@@ -327,7 +354,9 @@ ruff check .    # 若已安装 ruff
 
 已落地：工程基建（MIT / pyproject / tests）、A 股 T+1 / 涨跌停 / 量能、组合权重与下单频率、网格与 Walk-Forward、基准对比、Paper 线程安全与定时拉行情、多源降级、卖出区间深套路径、统一看板（单端口）、跨平台 ctl、定时分析推送（持仓与看板同库）。
 
-实盘券商通道仍为骨架；接入前请先用 Paper 全链路验证。
+V2（`main-v2` 分支，P0–P4 已落地）：双评分体系、机会引擎（支撑阻力 / 入场区间 / 止损 / 三档目标 / 风险收益比 / 仓位）、TradingPlan 决策状态、Trading Plan 历史回测（严格防 look-ahead）、AI 分析师（只解释不定价）、今日机会看板页、邮件模板新增「今日机会 · 交易计划」区块。全套 170 项测试通过。
+
+实盘券商通道仍为骨架；接入前请先用 Paper 全链路验证。P5 模拟盘 / P6 自动交易按计划书原则，待回测验证充分后再扩展。
 
 ---
 

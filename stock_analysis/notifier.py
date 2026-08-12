@@ -7,15 +7,15 @@ diagnosis block, a scan-hit block and a risk block — one message per market.
 """
 from __future__ import annotations
 
-import hmac
-import hashlib
 import base64
+import hashlib
+import hmac
 import smtplib
 import time
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
 from email.encoders import encode_base64
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Optional
 
 import requests
@@ -151,6 +151,7 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
                          capital_snapshot: Optional[dict] = None,
                          ai_summary: Optional[str] = None,
                          vibe_summary: Optional[str] = None,
+                         trading_plans: Optional[list] = None,
                          ) -> tuple[str, str, str]:
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
@@ -211,6 +212,24 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
         ) + "</pre>"
         html_parts.append(_html_section("🤖 GP助手 AI 点评", html_ai))
 
+    # --- V2 trading plans (今日机会) ---
+    if trading_plans:
+        text_parts.append("== 🎯 今日机会 · 交易计划 ==")
+        for p in trading_plans:
+            d = p.get("decision", "")
+            emoji = {"BUY_NOW": "🟢", "BUY_ON_PULLBACK": "🟢", "WATCH": "🟡",
+                     "HOLD": "🟠", "SELL": "🔴", "AVOID": "⛔"}.get(d, "")
+            line = (f"{emoji} {p.get('name')}({p.get('code')}) {d} | "
+                    f"评分{p.get('stock_score')}/{p.get('opportunity_score')} | "
+                    f"现价{p.get('current_price')} | 入场{p.get('entry_low')}~{p.get('entry_high')} | "
+                    f"止损{p.get('stop_loss')} | 目标{p.get('target_1')}/{p.get('target_2')} | "
+                    f"RR 1:{p.get('risk_reward_1')}")
+            if p.get("position_percent") is not None:
+                line += f" | 仓位{p.get('position_percent')}%"
+            text_parts.append(line)
+        text_parts.append("")
+        html_parts.append(_html_section("🎯 今日机会 · 交易计划", _plans_html(trading_plans)))
+
     # --- Vibe secondary ---
     if vibe_summary:
         text_parts.append("== GP助手 · Vibe 二次分析 ==")
@@ -225,7 +244,7 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
 
     # --- holding action (sell / add) ---
     if holding_actions:
-        from .holdings_action import actions_to_text, actions_to_html
+        from .holdings_action import actions_to_html, actions_to_text
         text_parts.append(actions_to_text(holding_actions))
         text_parts.append("")
         html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
@@ -443,5 +462,41 @@ def _scan_html_annotated(hits: list) -> str:
     return (
         "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
         "<th>评分</th><th>命中</th><th>可买性</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _plans_html(plans: list) -> str:
+    """V2 交易计划 HTML 表格（今日机会区块）。"""
+    if not plans:
+        return "<p class='neutral'>暂无</p>"
+
+    def _p2(v) -> str:
+        """价格两位小数；None/空 显示 —。"""
+        try:
+            return f"{float(v):.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    rows = ""
+    for p in plans[:20]:
+        d = p.get("decision", "")
+        emoji = {"BUY_NOW": "🟢", "BUY_ON_PULLBACK": "🟢", "WATCH": "🟡",
+                 "HOLD": "🟠", "SELL": "🔴", "AVOID": "⛔"}.get(d, "")
+        pos = f"{p.get('position_percent')}%" if p.get("position_percent") is not None else "—"
+        rr = f"1:{p.get('risk_reward_1')}" if p.get("risk_reward_1") is not None else "—"
+        rows += (
+            f"<tr><td><b>{emoji} {d}</b></td><td>{p.get('code')}</td><td>{p.get('name')}</td>"
+            f"<td>{_p2(p.get('current_price'))}</td>"
+            f"<td>{_p2(p.get('entry_low'))}~{_p2(p.get('entry_high'))}</td>"
+            f"<td>{_p2(p.get('stop_loss'))}</td>"
+            f"<td>{_p2(p.get('target_1'))}/{_p2(p.get('target_2'))}</td>"
+            f"<td>{rr}</td><td>{pos}</td>"
+            f"<td>{p.get('stock_score')}/{p.get('opportunity_score')}</td></tr>"
+        )
+    return (
+        "<table><thead><tr><th>决策</th><th>代码</th><th>名称</th><th>现价</th>"
+        "<th>入场区间</th><th>止损</th><th>目标1/2</th><th>风险收益</th>"
+        "<th>仓位</th><th>评分(股/机)</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
