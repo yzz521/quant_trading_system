@@ -486,41 +486,41 @@ P6  Automated Trading
 
 ## 22 · First Batch of Concrete Development Tasks
 
-- [ ] Establish V2 branch and protection rules
-- [ ] Establish V2 development documentation
-- [ ] Review existing scanner / funnel / diagnosis / sell_zone
-- [ ] Build Stock Score
-- [ ] Build Opportunity Score
-- [ ] Build Support / Resistance Engine
-- [ ] Build Entry Price Engine
-- [ ] Build Stop Loss Engine
-- [ ] Build Target Price Engine
-- [ ] Build Risk / Reward Engine
-- [ ] Build TradingPlan
-- [ ] Build Position Sizing
-- [ ] Build Trading Plan Backtest
-- [ ] Integrate AI Analyst
-- [ ] Rebuild Dashboard
+- [x] Establish V2 branch and protection rules
+- [x] Establish V2 development documentation
+- [x] Review existing scanner / funnel / diagnosis / sell_zone
+- [x] Build Stock Score
+- [x] Build Opportunity Score
+- [x] Build Support / Resistance Engine
+- [x] Build Entry Price Engine
+- [x] Build Stop Loss Engine
+- [x] Build Target Price Engine
+- [x] Build Risk / Reward Engine
+- [x] Build TradingPlan
+- [x] Build Position Sizing
+- [x] Build Trading Plan Backtest
+- [x] Integrate AI Analyst
+- [x] Rebuild Dashboard
 
 ---
 
 ## 23 · Definition of Done
 
-- [ ] Can scan the full market
-- [ ] Can obtain Top N candidate stocks
-- [ ] Each stock has a Stock Score
-- [ ] Each stock has an Opportunity Score
-- [ ] Each stock has an entry zone
-- [ ] Each stock has a stop loss
-- [ ] Each stock has at least two target prices
-- [ ] Has risk-reward ratio
-- [ ] Has suggested position size
-- [ ] Has BUY_NOW / BUY_ON_PULLBACK / WATCH and other states
-- [ ] Has historical backtesting
-- [ ] No look-ahead bias
-- [ ] AI can explain the results
-- [ ] Dashboard can directly view daily opportunities
-- [ ] Original main is not broken
+- [x] Can scan the full market
+- [x] Can obtain Top N candidate stocks
+- [x] Each stock has a Stock Score
+- [x] Each stock has an Opportunity Score
+- [x] Each stock has an entry zone
+- [x] Each stock has a stop loss
+- [x] Each stock has at least two target prices
+- [x] Has risk-reward ratio
+- [x] Has suggested position size
+- [x] Has BUY_NOW / BUY_ON_PULLBACK / WATCH and other states
+- [x] Has historical backtesting
+- [x] No look-ahead bias
+- [x] AI can explain the results
+- [x] Dashboard can directly view daily opportunities
+- [x] Original main is not broken
 
 ---
 
@@ -591,6 +591,23 @@ Ultimately, it does not tell the user:
 
 Instead, it tells the user:  
 **“This stock is worth watching; do not chase the high now; if it pulls back to 11.80~12.10, consider it; if 11.35 is broken, the trading thesis is invalidated; first target 13.20, second target 14.50.”**
+
+---
+
+## 27 · Implementation Status (2026-08-12)
+
+P0–P4 are fully implemented and validated with real data end-to-end (`main-v2` branch, 193 tests passing):
+
+- **Scoring**: Stock Score (6-dim weighted) + Opportunity Score (7-dim weighted)
+- **Opportunity Engine**: support/resistance, entry zone (ideal/standard/aggressive), stop loss (strictest of multiple sources), 3 targets, risk-reward, position sizing (account risk × stop distance)
+- **TradingPlan**: BUY_NOW / BUY_ON_PULLBACK / WATCH / HOLD / SELL / AVOID (RR < 1.5 → AVOID, no position)
+- **Backtest**: walk-forward daily simulation, strictly no look-ahead (plans built only from data up to T)
+- **AI Analyst**: quant results → natural language (AI explains, never prices); rule-based fallback without key
+- **Market**: real index (SSE/CSI300) → Regime / Risk; degrades to neutral on failure
+- **Batch Scanner**: candidates → concurrent per-stock plans, feeds the "Today's Opportunities" email block
+- **Dashboard V2**: market cards + trading plan + AI + backtest + batch scan
+
+**Remaining (later milestones, after backtesting is sufficiently validated)**: P5 Paper Trading, P6 Automated Trading.
 
 ---
 

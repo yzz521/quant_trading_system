@@ -486,41 +486,41 @@ P6  自动交易
 
 ## 22 · 第一批实际开发任务
 
-- [ ] 建立 V2 分支和保护规则
-- [ ] 建立 V2 开发文档
-- [ ] 梳理现有 scanner / funnel / diagnosis / sell_zone
-- [ ] 建立 Stock Score
-- [ ] 建立 Opportunity Score
-- [ ] 建立 Support / Resistance Engine
-- [ ] 建立 Entry Price Engine
-- [ ] 建立 Stop Loss Engine
-- [ ] 建立 Target Price Engine
-- [ ] 建立 Risk / Reward Engine
-- [ ] 建立 TradingPlan
-- [ ] 建立 Position Sizing
-- [ ] 建立 Trading Plan Backtest
-- [ ] 接入 AI Analyst
-- [ ] 重做 Dashboard
+- [x] 建立 V2 分支和保护规则
+- [x] 建立 V2 开发文档
+- [x] 梳理现有 scanner / funnel / diagnosis / sell_zone
+- [x] 建立 Stock Score
+- [x] 建立 Opportunity Score
+- [x] 建立 Support / Resistance Engine
+- [x] 建立 Entry Price Engine
+- [x] 建立 Stop Loss Engine
+- [x] 建立 Target Price Engine
+- [x] 建立 Risk / Reward Engine
+- [x] 建立 TradingPlan
+- [x] 建立 Position Sizing
+- [x] 建立 Trading Plan Backtest
+- [x] 接入 AI Analyst
+- [x] 重做 Dashboard
 
 ---
 
 ## 23 · Definition of Done
 
-- [ ] 可以扫描全市场
-- [ ] 可以得到候选股票 Top N
-- [ ] 每只股票有 Stock Score
-- [ ] 每只股票有 Opportunity Score
-- [ ] 每只股票有买入区间
-- [ ] 每只股票有止损
-- [ ] 每只股票至少有两个目标价
-- [ ] 有风险收益比
-- [ ] 有建议仓位
-- [ ] 有 BUY_NOW / BUY_ON_PULLBACK / WATCH 等状态
-- [ ] 有历史回测
-- [ ] 无未来函数
-- [ ] AI 可以解释结果
-- [ ] Dashboard 可以直接查看每日机会
-- [ ] 原有 main 不被破坏
+- [x] 可以扫描全市场
+- [x] 可以得到候选股票 Top N
+- [x] 每只股票有 Stock Score
+- [x] 每只股票有 Opportunity Score
+- [x] 每只股票有买入区间
+- [x] 每只股票有止损
+- [x] 每只股票至少有两个目标价
+- [x] 有风险收益比
+- [x] 有建议仓位
+- [x] 有 BUY_NOW / BUY_ON_PULLBACK / WATCH 等状态
+- [x] 有历史回测
+- [x] 无未来函数
+- [x] AI 可以解释结果
+- [x] Dashboard 可以直接查看每日机会
+- [x] 原有 main 不被破坏
 
 ---
 
@@ -591,6 +591,23 @@ XXX   +16.4%    🔴 SELL
 
 而是告诉用户：  
 **“这只股票值得关注；现在不要追高；如果回调到 11.80~12.10，可以考虑；11.35 跌破后交易逻辑失效；第一目标 13.20，第二目标 14.50。”**
+
+---
+
+## 27 · 落地状态（2026-08-12）
+
+P0–P4 已全部实现并完成真实数据全链路验证（`main-v2` 分支，全套 193 项测试通过）：
+
+- **评分系统**：Stock Score（6 维加权）+ Opportunity Score（7 维加权）
+- **机会引擎**：支撑阻力 / 入场区间（理想/标准/激进）/ 止损（多源取最严）/ 三档目标 / 风险收益比 / 仓位（账户风险 × 止损距离）
+- **TradingPlan**：BUY_NOW / BUY_ON_PULLBACK / WATCH / HOLD / SELL / AVOID（RR<1.5 即 AVOID，不计算仓位）
+- **历史回测**：逐日滑动回测，严格防 look-ahead（计划只用截至 T 日数据生成）
+- **AI 分析师**：量化结果 → 自然语言（AI 只解释、不定价），无 key 时规则化兜底
+- **市场环境**：真实指数（上证/沪深300）→ Regime / 风险，失败降级中性
+- **批量机会扫描**：候选股 → 并发逐个生成计划，可接入每日邮件「今日机会」区块
+- **Dashboard V2**：市场状态卡片 + 交易计划 + AI 解读 + 回测 + 批量扫描
+
+**剩余（后续里程碑，按计划书原则等回测充分验证后再做）**：P5 模拟盘、P6 自动交易。
 
 ---
 
