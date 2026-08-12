@@ -14,7 +14,7 @@ from typing import Callable, Optional
 import pandas as pd
 
 from ...utils import get_logger
-from ..data_fetcher import detect_market, fetch_kline
+from ..data_fetcher import detect_market, fetch_kline_sina_api
 from ..indicators import add_all_indicators
 from .opportunity_engine import OpportunityEngine
 from .trading_plan import DecisionState
@@ -26,9 +26,14 @@ KlineLoader = Callable[[str, str], Optional[pd.DataFrame]]
 
 
 def _default_loader(code: str, market: str = "CN") -> Optional[pd.DataFrame]:
+    """默认数据加载器：新浪日K JSON 接口（纯 urllib，线程安全）。
+
+    批量扫描是并发的，不能用 akshare 的 stock_zh_a_daily —— 其内置 JS 引擎
+    非线程安全，多线程并发会崩溃（funnel L3 同样因此改用新浪接口）。
+    """
     try:
         info = detect_market(code)
-        raw = fetch_kline(info, days=250)
+        raw = fetch_kline_sina_api(info, days=250)
         if raw is None or raw.empty:
             return None
         return add_all_indicators(raw)

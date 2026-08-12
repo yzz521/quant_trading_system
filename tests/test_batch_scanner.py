@@ -7,7 +7,39 @@ from __future__ import annotations
 
 import pandas as pd
 from quant_trading_system.stock_analysis.opportunity import OpportunityBatchScanner
+from quant_trading_system.stock_analysis.opportunity.batch_scanner import _default_loader
 from quant_trading_system.stock_analysis.opportunity.trading_plan import DecisionState, TradingPlan
+
+
+class TestDefaultLoader:
+    """默认 loader 必须用线程安全接口（防并发崩溃回归）。
+
+    批量扫描是多线程的，akshare 的 stock_zh_a_daily 内置非线程安全 JS 引擎
+    会崩溃（funnel L3 也因此用新浪接口），故默认 loader 必须用新浪纯 urllib 接口。
+    """
+
+    def test_loader_uses_sina_api(self):
+        import inspect
+
+        from quant_trading_system.stock_analysis import data_fetcher
+
+        src = inspect.getsource(_default_loader)
+        assert "fetch_kline_sina_api" in src, "默认 loader 应使用线程安全的新浪接口"
+        assert "fetch_kline(" not in src.replace("fetch_kline_sina_api", ""), "不应使用 akshare fetch_kline"
+        # 同时确认 sina 接口本身是纯 urllib 实现（函数体内不 import akshare）
+        import re
+
+        sina_src = inspect.getsource(data_fetcher.fetch_kline_sina_api)
+        assert "urllib" in sina_src
+        body = sina_src.split('"""')[-1]  # 去掉 docstring
+        assert not re.search(r"^\s*(import|from)\s+akshare", body, re.M), "sina 接口不应依赖 akshare"
+
+    def test_loader_failure_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.opportunity.batch_scanner.fetch_kline_sina_api",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("网络失败")),
+        )
+        assert _default_loader("600000") is None
 
 
 class _FakeEngine:
