@@ -467,7 +467,14 @@ def _scan_html_annotated(hits: list) -> str:
 
 
 def _plans_html(plans: list) -> str:
-    """V2 交易计划 HTML 表格（今日机会区块）。"""
+    """V2 交易计划 HTML 表格（今日机会区块）。
+
+    设计要点（窄屏邮件友好）：
+      * 决策/代码/名称合并成一列「代码·名称」，节省宽度
+      * 「风险收益」显示为 RR=N 而不是 1:N（更紧凑）
+      * 「评分」去掉（机会分已隐含在决策/置信度里）
+      * 表头用 8 列，< 600px 视窗下能完整显示
+    """
     if not plans:
         return "<p class='neutral'>暂无</p>"
 
@@ -483,20 +490,24 @@ def _plans_html(plans: list) -> str:
         d = p.get("decision", "")
         emoji = {"BUY_NOW": "🟢", "BUY_ON_PULLBACK": "🟢", "WATCH": "🟡",
                  "HOLD": "🟠", "SELL": "🔴", "AVOID": "⛔"}.get(d, "")
+        code = p.get("code") or "—"
+        name = p.get("name") or code  # 名称缺失时回退到代码，避免显示空
         pos = f"{p.get('position_percent')}%" if p.get("position_percent") is not None else "—"
-        rr = f"1:{p.get('risk_reward_1')}" if p.get("risk_reward_1") is not None else "—"
+        rr = p.get("risk_reward_1")
+        rr_str = f"RR={rr:.2f}" if isinstance(rr, (int, float)) and rr else "RR=—"
         rows += (
-            f"<tr><td><b>{emoji} {d}</b></td><td>{p.get('code')}</td><td>{p.get('name')}</td>"
+            f"<tr><td><b>{emoji} {d}</b></td>"
+            f"<td>{code}<br><span style='color:#6b7280;font-size:12px'>{name}</span></td>"
             f"<td>{_p2(p.get('current_price'))}</td>"
             f"<td>{_p2(p.get('entry_low'))}~{_p2(p.get('entry_high'))}</td>"
             f"<td>{_p2(p.get('stop_loss'))}</td>"
             f"<td>{_p2(p.get('target_1'))}/{_p2(p.get('target_2'))}</td>"
-            f"<td>{rr}</td><td>{pos}</td>"
-            f"<td>{p.get('stock_score')}/{p.get('opportunity_score')}</td></tr>"
+            f"<td>{rr_str}</td>"
+            f"<td>{pos}</td></tr>"
         )
     return (
-        "<table><thead><tr><th>决策</th><th>代码</th><th>名称</th><th>现价</th>"
+        "<table><thead><tr><th>决策</th><th>代码·名称</th><th>现价</th>"
         "<th>入场区间</th><th>止损</th><th>目标1/2</th><th>风险收益</th>"
-        "<th>仓位</th><th>评分(股/机)</th></tr></thead>"
+        "<th>仓位</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )

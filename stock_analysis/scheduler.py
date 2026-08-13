@@ -352,8 +352,11 @@ class MarketScheduler:
                     regime = mkt.get("regime")
                 except Exception as e:  # noqa: BLE001
                     log.warning("[%s] 市场状态获取失败，机会扫描用中性: %s", market, e)
-                # 候选源：优先用扫描命中，其次股票池
-                candidates = [h["code"] for h in (scan_hits or [])] or pool
+                # 候选源：优先用扫描命中（带名称），其次股票池（用 code 作 name 兜底）
+                candidates = [
+                    {"code": h["code"], "name": h.get("name") or h["code"]}
+                    for h in (scan_hits or [])
+                ] or pool
                 max_stocks = int(opp_cfg.get("max_stocks", 15))
                 candidates = candidates[:max_stocks]
                 if candidates:

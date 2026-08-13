@@ -33,9 +33,10 @@ class TestPlansHtml:
         html = _plans_html([_plan()])
         assert "今日机会" not in html  # helper 只渲染表格
         assert "600000" in html
+        assert "测试股" in html  # 名称
         assert "11.80~12.10" in html
         assert "13.20/14.50" in html
-        assert "1:2.08" in html
+        assert "RR=2.08" in html  # 紧凑格式
         assert "20.0%" in html
 
     def test_decision_emoji(self):
@@ -49,7 +50,10 @@ class TestPlansHtml:
     def test_missing_fields_tolerated(self):
         html = _plans_html([{"code": "1", "decision": "WATCH"}])
         assert "<tr>" in html
-        assert "1:None" not in html  # risk_reward 缺失显示为 None 会兜底
+        assert "RR=—</td>" in html  # risk_reward 缺失兜底为 RR=—
+        assert "RR=None" not in html
+        # 名称缺失时回退为代码（不显示空单元格）
+        assert "<td>1<br>" in html
 
 
 class TestBuildMarketMessage:
