@@ -15,25 +15,33 @@ from quant_trading_system.stock_analysis.opportunity.trading_plan import Decisio
 class TestDefaultLoader:
     """默认 loader 必须用线程安全接口（防并发崩溃回归）。
 
-    批量扫描是多线程的，akshare 的 stock_zh_a_daily 内置非线程安全 JS 引擎
-    会崩溃（funnel L3 也因此用新浪接口），故默认 loader 必须用新浪纯 urllib 接口。
+    批量扫描是多线程的，akshare 的 stock_zh_a_daily / stock_hk_daily 内置
+    非线程安全 mini_racer JS 引擎，多线程并发必崩（libmini_racer
+    address_pool_manager Check failed）。默认 loader 按市场走线程安全源：
+    CN=新浪 / HK=腾讯 / US=yfinance。
     """
 
-    def test_loader_uses_sina_api(self):
+    def test_loader_uses_threadsafe_sources(self):
         import inspect
 
         from quant_trading_system.stock_analysis import data_fetcher
 
         src = inspect.getsource(_default_loader)
-        assert "fetch_kline_sina_api" in src, "默认 loader 应使用线程安全的新浪接口"
-        assert "fetch_kline(" not in src.replace("fetch_kline_sina_api", ""), "不应使用 akshare fetch_kline"
-        # 同时确认 sina 接口本身是纯 urllib 实现（函数体内不 import akshare）
+        # CN 走新浪线程安全接口
+        assert "fetch_kline_sina_api" in src
+        # HK 走腾讯线程安全接口（防 akshare mini_racer 崩溃）
+        assert "fetch_kline_hk_tencent" in src
+        # US 走 fetch_kline（内部 yfinance，线程安全）
+        assert "info.market == \"HK\"" in src and "fetch_kline(info" in src
+        # 同时确认新浪/腾讯接口本身是纯 urllib 实现（函数体内不 import akshare）
         import re
 
-        sina_src = inspect.getsource(data_fetcher.fetch_kline_sina_api)
-        assert "urllib" in sina_src
-        body = sina_src.split('"""')[-1]  # 去掉 docstring
-        assert not re.search(r"^\s*(import|from)\s+akshare", body, re.M), "sina 接口不应依赖 akshare"
+        for fn in (data_fetcher.fetch_kline_sina_api, data_fetcher.fetch_kline_hk_tencent):
+            fsrc = inspect.getsource(fn)
+            assert "urllib" in fsrc
+            body = fsrc.split('"""')[-1]
+            assert not re.search(r"^\s*(import|from)\s+akshare", body, re.M), \
+                f"{fn.__name__} 不应依赖 akshare"
 
     def test_loader_failure_returns_none(self, monkeypatch):
         monkeypatch.setattr(
@@ -51,18 +59,44 @@ class TestDefaultLoader:
         assert detect_market("AAPL").market == "US"
         assert detect_market("MSFT").market == "US"
 
-    def test_default_loader_fails_non_cn(self, monkeypatch):
-        """回归：默认 loader 只走新浪 CN 接口，对 US/HK 代码会失败/返回 None。
+    def test_default_loader_routes_by_market(self, monkeypatch):
+        """回归：loader 按市场路由——CN 走新浪、HK 走腾讯、US 走 fetch_kline。
 
-        这解释了为何修复前美股/港股批量扫描恒为空——页面已改用
-        跨市场 loader（CN=新浪 / US=yfinance / HK=akshare）。
+        修复前默认 loader 只走新浪 CN 接口，港股/美股批量扫描恒为空。
         """
+        import pandas as pd
+
+        fake = pd.DataFrame({
+            "open": [10.0, 11.0], "high": [10.5, 11.5], "low": [9.5, 10.5],
+            "close": [10.0, 11.0], "volume": [1e6, 1.2e6],
+        })
+
+        def fake_sina(info, **kw):
+            assert info.market == "CN"
+            return fake
+
+        def fake_hk(info, **kw):
+            assert info.market == "HK"
+            return fake
+
+        def fake_fetch(info, **kw):
+            assert info.market == "US"
+            return fake
+
         monkeypatch.setattr(
             "quant_trading_system.stock_analysis.opportunity.batch_scanner.fetch_kline_sina_api",
-            lambda *a, **kw: None,
+            fake_sina,
         )
-        # HK 5 位纯数字（00700）被 detect_market 判为 HK → 但仍走新浪接口 → 返回 None
-        assert _default_loader("00700") is None
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.opportunity.batch_scanner.fetch_kline_hk_tencent",
+            fake_hk,
+        )
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.data_fetcher.fetch_kline", fake_fetch,
+        )
+        assert _default_loader("600000") is not None
+        assert _default_loader("00700") is not None
+        assert _default_loader("AAPL") is not None
 
 
 class _FakeEngine:

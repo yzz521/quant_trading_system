@@ -342,3 +342,48 @@ def _safe_float(v) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def fetch_kline_hk_tencent(info: MarketInfo, days: int = 120) -> pd.DataFrame:
+    """港股日K（腾讯 hkfqkline 接口，纯 urllib，线程安全，带退避重试）。
+
+    akshare 的 stock_hk_daily 内部用 mini_racer JS 引擎，批量并发会崩
+    （libmini_racer address_pool_manager Check failed）；腾讯接口纯 HTTP 无此问题。
+    返回：open/high/low/close/volume + DatetimeIndex（前复权）。
+    """
+    try:
+        _clear_proxy()
+        import json
+        import time
+        import urllib.request
+        sym = info.symbol if info.symbol.startswith("hk") else "hk" + info.symbol
+        url = (f"https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+               f"?param={sym},day,,,{days},qfq")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = None
+        for attempt in range(3):
+            try:
+                raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+                break
+            except Exception:  # noqa: BLE001
+                if attempt == 2:
+                    raise
+                time.sleep(0.3 * (attempt + 1))
+        data = json.loads(raw)
+        node = (data.get("data") or {}).get(sym) or {}
+        rows = node.get("qfqday") or node.get("day") or []
+        if not rows:
+            return pd.DataFrame()
+        # 腾讯港股行： [date, open, close, high, low, volume, ...]
+        df = pd.DataFrame(
+            [r[:6] for r in rows],
+            columns=["datetime", "open", "close", "high", "low", "volume"],
+        )
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.set_index("datetime").sort_index()
+        return df[["open", "high", "low", "close", "volume"]]
+    except Exception as e:  # noqa: BLE001
+        log.warning("腾讯港股日K获取失败 %s: %s", info.code, e)
+        return pd.DataFrame()

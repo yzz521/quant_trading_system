@@ -30,7 +30,6 @@ from quant_trading_system.stock_analysis.ai import explain_plan
 from quant_trading_system.stock_analysis.backtest import TradingPlanBacktest
 from quant_trading_system.stock_analysis.data_fetcher import (
     fetch_fund_flow,
-    fetch_kline_sina_api,
     fetch_valuation,
 )
 from quant_trading_system.stock_analysis.market import (
@@ -57,22 +56,6 @@ def _cached_spot():
     """A股全市场快照（缓存 10 分钟，顶部市场状态与 CN 初筛共享）。"""
     from quant_trading_system.stock_analysis.data_fetcher import fetch_spot_snapshot
     return fetch_spot_snapshot()
-
-
-def _multi_market_loader(code: str, name: str = ""):
-    """跨市场 K 线加载器：CN 用新浪线程安全接口（并发5），US 用 yfinance，
-    HK 用 akshare（非线程安全，scheduler/页面并发降到 2）。"""
-    try:
-        info = detect_market(code)
-        raw = (
-            fetch_kline_sina_api(info, days=250) if info.market == "CN"
-            else fetch_kline(info, days=250)
-        )
-        if raw is None or raw.empty:
-            return None
-        return add_all_indicators(raw)
-    except Exception:  # noqa: BLE001
-        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +132,7 @@ def _scan_market(market: str, top_n: int, account_eq: float,
         )
         # HK 用 akshare（非线程安全）→ 并发降到 2
         workers = {"CN": 5, "US": 5, "HK": 2}.get(market, 5)
-        scanner = OpportunityBatchScanner(engine=eng, workers=workers, loader=_multi_market_loader)
+        scanner = OpportunityBatchScanner(engine=eng, workers=workers)
         return cands, scanner.scan(cands, market=market)
     except Exception:  # noqa: BLE001
         return [], None
@@ -479,7 +462,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
                     regime_score=regime.score if regime else None,
                     market_factor=regime.factor if regime else 1.0,
                 )
-                scanner = OpportunityBatchScanner(engine=eng, workers=5, loader=_multi_market_loader)
+                scanner = OpportunityBatchScanner(engine=eng, workers=5)
                 custom_res = scanner.scan(codes)
             if custom_res.plans:
                 st.success(f"✔ 扫描完成：{len(custom_res.plans)} 个有效计划（AVOID 已过滤，耗时 {custom_res.elapsed:.1f}s）")
