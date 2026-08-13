@@ -159,3 +159,37 @@ def score_rr(ratio: Optional[float]) -> float:
     if ratio >= 1.5:
         return 55.0
     return 25.0
+
+
+def score_momentum(df: pd.DataFrame) -> float:
+    """动量（Momentum）：近 20/60 日收益 + RSI 强度（0-100）。
+
+    与 score_trend（均线结构）互补：趋势看结构、动量看速度。
+    复用 roc/rsi 指标列，零新增指标；数据不足返回 50 中性。
+    """
+    if df is None or len(df) < 21:
+        return 50.0
+    d = df.tail(61).reset_index(drop=True)
+    close = pd.to_numeric(d["close"], errors="coerce")
+    if close.isna().all() or len(close) < 21:
+        return 50.0
+    cur = float(close.iloc[-1])
+    ret20 = (cur / float(close.iloc[-21]) - 1) * 100 if float(close.iloc[-21]) > 0 else 0.0
+    ret60 = 0.0
+    if len(close) >= 61:
+        prev60 = float(close.iloc[0])
+        ret60 = (cur / prev60 - 1) * 100 if prev60 > 0 else 0.0
+    # RSI 强度：60-75 健康强势，>80 过热，<40 弱
+    rsi = pd.to_numeric(d["rsi12"], errors="coerce").iloc[-1] if "rsi12" in d.columns else None
+    rsi_score = 50.0
+    if rsi is not None and not np.isnan(rsi):
+        if 55 <= rsi <= 75:
+            rsi_score = 80.0
+        elif 45 <= rsi < 55 or 75 < rsi <= 85:
+            rsi_score = 60.0
+        elif 40 <= rsi < 45:
+            rsi_score = 40.0
+        else:
+            rsi_score = 20.0  # RSI<40 弱 / >85 过热
+    score = 0.6 * normalize_component(ret20, -10, 20) + 0.2 * normalize_component(ret60, -15, 30) + 0.2 * rsi_score
+    return float(np.clip(score, 0, 100))

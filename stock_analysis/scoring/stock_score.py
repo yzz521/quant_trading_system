@@ -1,8 +1,9 @@
 """Stock Score —— 个股质量评分（0-100）。
 
 回答「这只股票本身好不好」。
-权重（计划书 §05）：
-  基本面质量 20% | 技术趋势 25% | 资金流 15% | 估值 10% | 市场环境 10% | 风险 20%
+权重（Factor Engine，9 因子，和=1.00）：
+  基本面质量 12% | 成长 8% | 技术趋势 20% | 动量 5% | 资金流 15%
+  | 估值 10% | 市场环境 5% | 板块强度 5% | 风险 20%
 """
 from __future__ import annotations
 
@@ -12,14 +13,17 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .score_components import normalize_component, score_trend
+from .score_components import normalize_component, score_momentum, score_trend
 
 WEIGHTS = {
-    "fundamental": 0.20,
-    "technical": 0.25,
+    "fundamental": 0.12,
+    "growth": 0.08,
+    "technical": 0.20,
+    "momentum": 0.05,
     "capital_flow": 0.15,
     "valuation": 0.10,
-    "market_env": 0.10,
+    "market_env": 0.05,
+    "sector": 0.05,
     "risk": 0.20,
 }
 
@@ -117,6 +121,29 @@ def _score_market_env(regime_score: Optional[float]) -> float:
     return float(np.clip(regime_score if regime_score is not None else 50, 0, 100))
 
 
+def _score_growth(extra: Optional[dict] = None) -> float:
+    """成长（Growth）：营收/净利同比增速。缺数据 → 50 中性。"""
+    extra = extra or {}
+    rev = _num(extra.get("rev_yoy"))
+    profit = _num(extra.get("profit_yoy"))
+    if rev is None and profit is None:
+        return 50.0
+    s = 50.0
+    n = 0
+    if profit is not None:  # 净利同比 -20%~50% 线性（权重 0.6）
+        s += (normalize_component(profit, -20, 50) - 50) * 0.6
+        n += 1
+    if rev is not None:  # 营收同比 -10%~40%（权重 0.4）
+        s += (normalize_component(rev, -10, 40) - 50) * 0.4
+        n += 1
+    return float(np.clip(s, 0, 100))
+
+
+def _score_sector(sector_score: Optional[float]) -> float:
+    """板块强度（Sector Rotation）：由外部板块轮动模块给出 0-100，未命中 50。"""
+    return float(np.clip(sector_score if sector_score is not None else 50, 0, 100))
+
+
 def _score_risk(df: pd.DataFrame, news_risks: Optional[list] = None) -> float:
     """风险维度：技术风险（高位/超买）+ 新闻风险关键词。分数越高 = 风险越低（越安全）。"""
     s = 80.0
@@ -147,27 +174,32 @@ def calc_stock_score(
     *,
     extra: Optional[dict] = None,
     regime_score: Optional[float] = None,
+    sector_score: Optional[float] = None,
     news_risks: Optional[list] = None,
     weights: Optional[dict] = None,
 ) -> StockScore:
-    """计算个股质量评分。
+    """计算个股质量评分（9 因子）。
 
     Args:
-        df: 已加指标的日K（technical/risk 维度使用；可为 None，此时用 extra 兜底）。
-        extra: 外部数据（市值/PE/换手/主力净流入/金额/ROE 等）。
+        df: 已加指标的日K（technical/momentum/risk 维度使用；可为 None，此时用 extra 兜底）。
+        extra: 外部数据（市值/PE/换手/主力净流入/营收净利同比/金额/ROE 等）。
         regime_score: 市场环境分（0-100）。
+        sector_score: 板块强度分（0-100，Sector Rotation 环节）。
         news_risks: 新闻风险列表（命中关键词的条目）。
-        weights: 自定义权重（默认按计划书 §05）。
+        weights: 自定义权重（默认 9 因子权重）。
     """
     w = {**WEIGHTS, **(weights or {})}
     extra = extra or {}
 
     comps = {
         "fundamental": _score_fundamental(df, extra),
+        "growth": _score_growth(extra),
         "technical": score_trend(df) if df is not None else 50.0,
+        "momentum": score_momentum(df) if df is not None else 50.0,
         "capital_flow": _score_capital_flow(df, extra),
         "valuation": _score_valuation(df, extra),
         "market_env": _score_market_env(regime_score),
+        "sector": _score_sector(sector_score),
         "risk": _score_risk(df, news_risks),
     }
     total = sum(comps[k] * w[k] for k in w)

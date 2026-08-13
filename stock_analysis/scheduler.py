@@ -159,10 +159,22 @@ class MarketScheduler:
                 ]
                 if candidates:
                     log.info("[%s] 批量机会扫描 %d 只（初筛）...", market, len(candidates))
+                    # Sector Rotation：CN 时构建板块强度+映射（失败自动中性 50）
+                    sector_rank, sector_map = [], {}
+                    if market == "CN":
+                        try:
+                            from .sector import fetch_sector_rank, get_stock_sectors
+                            sector_rank = fetch_sector_rank("CN")
+                            sector_map = get_stock_sectors()
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("[%s] 板块轮动不可用（用中性）: %s", market, e)
+                            sector_rank, sector_map = [], {}
                     engine = OpportunityEngine(
                         account_equity=float(opp_cfg.get("account_equity", 100_000)),
                         regime_score=regime.score if regime else None,
                         market_factor=regime.factor if regime else 1.0,
+                        sector_map=sector_map,
+                        sector_rank=sector_rank,
                     )
                     scanner = OpportunityBatchScanner(
                         engine=engine,

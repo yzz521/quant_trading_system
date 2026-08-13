@@ -299,3 +299,46 @@ def fetch_kline_sina_api(info: MarketInfo, days: int = 120) -> pd.DataFrame:
     except Exception as e:  # noqa: BLE001
         log.warning("新浪日K获取失败 %s: %s", info.code, e)
         return pd.DataFrame()
+
+
+def fetch_growth_factors(info: MarketInfo) -> Optional[dict]:
+    """成长因子（Growth）：营收/净利同比增速。A股专用，失败返回 None。
+
+    用新浪财务指标接口（ak.stock_financial_analysis_indicator），与现有新浪
+    数据策略一致。仅在单票详情路径调用（批量扫描不取财务，akshare 非线程安全）。
+    Returns:
+        {"rev_yoy": ..., "profit_yoy": ...}（百分比数值），失败 None。
+    """
+    if info.market != "CN":
+        return None
+    try:
+        _clear_proxy()
+        import akshare as ak
+
+        df = ak.stock_financial_analysis_indicator(symbol=info.code)
+        if df is None or df.empty:
+            return None
+        row = df.iloc[-1]
+        rev = None
+        profit = None
+        for c in df.columns:
+            if "收入增长" in c or "营业总收入同比增长" in c:
+                rev = _safe_float(row[c])
+            elif "净利润增长" in c:
+                profit = _safe_float(row[c])
+        out = {}
+        if rev is not None:
+            out["rev_yoy"] = rev
+        if profit is not None:
+            out["profit_yoy"] = profit
+        return out or None
+    except Exception as e:  # noqa: BLE001
+        log.debug("成长因子不可用 %s: %s", info.code, e)
+        return None
+
+
+def _safe_float(v) -> Optional[float]:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None

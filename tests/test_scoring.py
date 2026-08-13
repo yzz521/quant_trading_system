@@ -41,9 +41,40 @@ class TestStockScore:
     def test_weights_follow_plan(self):
         ss = calc_stock_score(None)
         w = {k: b["weight"] for k, b in ss.breakdown.items()}
-        assert w["technical"] == 0.25
+        # 9 因子（Factor Engine）
+        assert w["technical"] == 0.20
         assert w["risk"] == 0.20
-        assert w["fundamental"] == 0.20
+        assert w["fundamental"] == 0.12
+        assert w["growth"] == 0.08
+        assert w["momentum"] == 0.05
+        assert w["capital_flow"] == 0.15
+        assert w["valuation"] == 0.10
+        assert w["market_env"] == 0.05
+        assert w["sector"] == 0.05
+
+    def test_growth_neutral_without_data(self):
+        """无成长数据 → growth 因子 50 中性（不拖累总分）。"""
+        ss = calc_stock_score(_kline())
+        assert ss.components["growth"] == pytest.approx(50.0)
+
+    def test_growth_responds_to_extra(self):
+        """净利同比高 → growth 分上升；净利同比负 → 下降。"""
+        ss_good = calc_stock_score(_kline(), extra={"rev_yoy": 30.0, "profit_yoy": 40.0})
+        ss_bad = calc_stock_score(_kline(), extra={"rev_yoy": -20.0, "profit_yoy": -30.0})
+        assert ss_good.components["growth"] > 50.0
+        assert ss_bad.components["growth"] < 50.0
+
+    def test_sector_factor_affects_score(self):
+        """板块强度传入 → sector 因子反映；缺失为中性 50。"""
+        ss_neutral = calc_stock_score(_kline())
+        ss_hot = calc_stock_score(_kline(), sector_score=95.0)
+        assert ss_neutral.components["sector"] == pytest.approx(50.0)
+        assert ss_hot.components["sector"] == pytest.approx(95.0)
+
+    def test_momentum_range(self):
+        """momentum 因子始终在 0-100。"""
+        ss = calc_stock_score(_kline())
+        assert 0 <= ss.components["momentum"] <= 100
 
     def test_to_dict(self):
         ss = calc_stock_score(_kline())

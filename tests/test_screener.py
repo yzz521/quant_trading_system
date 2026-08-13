@@ -73,12 +73,51 @@ class TestScreenHK:
 
 
 class TestScreenUS:
-    def test_known_pool_fallback(self):
+    def test_nasdaq_filters_and_sorts(self, monkeypatch):
+        """美股全市场：mock nasdaq API → 按市值过滤排序取 top_n。"""
+        df = pd.DataFrame([
+            {"symbol": "NVDA", "name": "NVIDIA Corporation Common Stock", "lastsale": "$224.09", "marketCap": "$3.4B"},
+            {"symbol": "AAPL", "name": "Apple Inc. Common Stock", "lastsale": "$338.19", "marketCap": "$5.1B"},
+            {"symbol": "PENN", "name": "Penn Entertainment Common Stock", "lastsale": "$1.50", "marketCap": "$0.2B"},
+            {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "lastsale": "$590.0", "marketCap": "$0.5B"},
+            {"symbol": "MSFT", "name": "Microsoft Corporation Common Stock", "lastsale": "$480.0", "marketCap": "$3.5B"},
+        ])
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.screener._fetch_nasdaq_universe",
+            lambda: df,
+        )
+        out = screen_candidates("US", top_n=10)
+        codes = [c["code"] for c in out]
+        # 市值 ≥100 亿美元 + 价>2 + 剔 ETF → NVDA/AAPL/MSFT（按市值降序：AAPL>MSFT>NVDA）
+        assert codes == ["AAPL", "MSFT", "NVDA"]
+
+    def test_nasdaq_top_n_limits(self, monkeypatch):
+        df = pd.DataFrame([
+            {"symbol": f"S{i:04d}", "name": f"Stock {i}", "lastsale": "$50.0", "marketCap": "$1B"}
+            for i in range(10)
+        ])
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.screener._fetch_nasdaq_universe",
+            lambda: df,
+        )
+        assert len(screen_candidates("US", top_n=3)) == 3
+
+    def test_nasdaq_failure_falls_back(self, monkeypatch):
+        """nasdaq API 失败 → 回退知名池。"""
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.screener._fetch_nasdaq_universe",
+            lambda: None,
+        )
         out = screen_candidates("US", top_n=5)
         assert len(out) == 5
         assert out[0]["code"] == "AAPL"
 
-    def test_config_pool_prepended(self):
+    def test_config_pool_prepended(self, monkeypatch):
+        """兜底路径：配置池优先且去重。"""
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.screener._fetch_nasdaq_universe",
+            lambda: None,
+        )
         out = screen_candidates("US", top_n=3, config={"us_pool": ["MSFT", "TSLA"]})
         codes = [c["code"] for c in out]
         assert codes == ["MSFT", "TSLA", "AAPL"]  # 配置池优先，且去重

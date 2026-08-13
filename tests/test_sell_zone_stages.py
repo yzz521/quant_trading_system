@@ -1,7 +1,9 @@
 from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 from quant_trading_system.stock_analysis.sell_zone import analyze_sell_zone
+
 
 def test_deep_loss_has_stages():
     n = 80

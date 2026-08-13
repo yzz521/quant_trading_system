@@ -22,7 +22,7 @@ from typing import Optional
 import pandas as pd
 
 from ..utils import get_logger
-from .data_fetcher import fetch_spot_snapshot
+from .data_fetcher import _restore_proxy, fetch_spot_snapshot
 
 log = get_logger("Screener")
 
@@ -94,7 +94,74 @@ def _screen_hk(top_n: int, min_amount: Optional[float]) -> list[dict]:
 
 
 def _screen_us(top_n: int, config: Optional[dict]) -> list[dict]:
-    """美股：东财接口当前网络不可用 → 配置池 + 知名美股列表（保底）。"""
+    """美股：nasdaq screener API 全市场（~7000 只）→ 按市值降序 Top N。
+
+    东财接口（push2.eastmoney.com）被网络代理拦截，akshare 美股源不可用；
+    nasdaq 官方 screener API 1.5s 拉全量。失败 → 回退知名池（_us_fallback_pool）。
+    """
+    try:
+        df = _fetch_nasdaq_universe()
+        if df is None or df.empty:
+            return _us_fallback_pool(top_n, config)
+        # lastsale>2 美元 + 市值 ≥ 100 亿美元 + 剔除 ETF/信托/基金
+        df = df.dropna(subset=["symbol", "lastsale"])
+        df["lastsale"] = pd.to_numeric(df["lastsale"].astype(str).replace(r"[\$,]", "", regex=True), errors="coerce")
+        df["market_cap"] = pd.to_numeric(df["marketCap"].astype(str).replace(r"[\$,B,M]", "", regex=True), errors="coerce")
+        # marketCap 单位为十亿（B），统一换算为亿美元
+        df["mcap_yi_usd"] = df["market_cap"] * 100
+        mask = (df["lastsale"] > 2) & (df["mcap_yi_usd"] >= 100)
+        name_ok = ~df["name"].astype(str).str.contains(
+            "ETF|ETN|Fund|Trust", case=False, regex=True, na=False
+        )
+        df = df[mask & name_ok].sort_values("mcap_yi_usd", ascending=False)
+        out: list[dict] = []
+        for _, r in df.head(top_n).iterrows():
+            sym = str(r["symbol"]).strip().upper()
+            if sym:
+                out.append({"code": sym, "name": sym})
+        return out or _us_fallback_pool(top_n, config)
+    except Exception as e:  # noqa: BLE001
+        log.warning("美股全市场获取失败，回退知名池: %s", e)
+        return _us_fallback_pool(top_n, config)
+
+
+def _fetch_nasdaq_universe() -> Optional[pd.DataFrame]:
+    """nasdaq screener API 全市场列表（~7110 只，1.5s）。
+
+    需恢复代理 + UA + 绕过 SSL（nasdaq API 在此网络下校验异常）。
+    Returns:
+        DataFrame[symbol/name/lastsale/volume/...]；失败 None。
+    """
+    try:
+        import json
+        import ssl
+        import urllib.request
+
+        _restore_proxy()
+        url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=8000&offset=0"
+        ctx = ssl._create_unverified_context()
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://www.nasdaq.com",
+                "Referer": "https://www.nasdaq.com/",
+            },
+        )
+        raw = urllib.request.urlopen(req, timeout=20, context=ctx).read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        rows = (((data or {}).get("data") or {}).get("table") or {}).get("rows") or []
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+    except Exception as e:  # noqa: BLE001
+        log.warning("nasdaq screener 获取失败: %s", e)
+        return None
+
+
+def _us_fallback_pool(top_n: int, config: Optional[dict]) -> list[dict]:
+    """美股兜底：配置池 + 知名美股列表（去重保序）。"""
     pool = list((config or {}).get("us_pool") or [])
     seen, out = set(), []
     for code in [*pool, *KNOWN_US]:

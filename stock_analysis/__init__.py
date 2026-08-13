@@ -16,6 +16,7 @@ from .indicators import add_all_indicators
 from .notifier import Notifier, build_market_message
 from .scheduler import MarketScheduler
 from .screener import screen_candidates
+from .sector import fetch_sector_rank, get_stock_sectors, sector_factor
 
 __all__ = [
     "MarketInfo",
@@ -28,4 +29,7 @@ __all__ = [
     "MarketScheduler",
     "Holdings",
     "screen_candidates",
+    "fetch_sector_rank",
+    "get_stock_sectors",
+    "sector_factor",
 ]

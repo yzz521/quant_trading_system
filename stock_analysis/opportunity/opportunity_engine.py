@@ -61,12 +61,17 @@ class OpportunityEngine:
         max_position_pct: float = 0.20,
         market_factor: float = 1.0,
         regime_score: Optional[float] = None,
+        sector_map: Optional[dict] = None,
+        sector_rank: Optional[list] = None,
     ) -> None:
         self.account_equity = account_equity
         self.risk_percent = risk_percent
         self.max_position_pct = max_position_pct
         self.market_factor = market_factor
         self.regime_score = regime_score
+        # Sector Rotation：{code6: 板块名} + 板块强度排名（可为 None，失败中性 50）
+        self.sector_map = sector_map or {}
+        self.sector_rank = sector_rank or []
 
     def analyze(
         self,
@@ -110,9 +115,16 @@ class OpportunityEngine:
             exit_.target_2 or 0,
         )
 
-        # 5) 双评分
+        # 5) 双评分（含 Sector Rotation：板块强度因子）
+        stock_sector = (self.sector_map or {}).get(code)
+        sector_score = None
+        if stock_sector:
+            from ..sector import sector_factor
+
+            sector_score = sector_factor(stock_sector, self.sector_rank)
         stock_score = calc_stock_score(
-            df, extra=extra, regime_score=self.regime_score, news_risks=news_risks
+            df, extra=extra, regime_score=self.regime_score,
+            sector_score=sector_score, news_risks=news_risks,
         )
         opportunity_score = calc_opportunity_score(
             df,
@@ -168,6 +180,10 @@ class OpportunityEngine:
             risks=risks,
             invalidate_condition=invalidate,
         )
+        # 板块信息写入 meta（供 Dashboard/邮件展示）
+        if stock_sector:
+            plan.meta["sector"] = stock_sector
+            plan.meta["sector_score"] = round(sector_score or 50.0, 1)
 
         return OpportunityResult(
             code=code,

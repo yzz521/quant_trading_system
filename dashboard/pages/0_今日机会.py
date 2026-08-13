@@ -105,14 +105,25 @@ def _scan_market(market: str, top_n: int, account_eq: float,
                  regime_score: float | None, market_factor: float):
     """全市场初筛 → 批量机会引擎（缓存 10 分钟，避免重复拉 K 线）。"""
     from quant_trading_system.stock_analysis.screener import screen_candidates
+    from quant_trading_system.stock_analysis.sector import fetch_sector_rank, get_stock_sectors
 
     cands = screen_candidates(market, top_n=top_n)
     if not cands:
         return [], None
+    # Sector Rotation：CN 时构建板块强度+成分映射（失败自动中性 50）
+    sector_rank, sector_map = [], {}
+    if market == "CN":
+        try:
+            sector_rank = fetch_sector_rank("CN")
+            sector_map = get_stock_sectors()
+        except Exception:  # noqa: BLE001
+            sector_rank, sector_map = [], {}
     eng = OpportunityEngine(
         account_equity=account_eq,
         regime_score=regime_score,
         market_factor=market_factor,
+        sector_map=sector_map,
+        sector_rank=sector_rank,
     )
     scanner = OpportunityBatchScanner(engine=eng, workers=5)
     res = scanner.scan(cands, market=market)
@@ -136,30 +147,49 @@ else:
 if cands and res is not None and not res.plans:
     st.warning("当前市场无有效机会（可能全部 AVOID 或数据不足），可换市场或下方『自定义扫描』")
 elif cands and res is not None:
-    rows = []
-    for p in res.plans:
-        rows.append({
-            "决策": f"{p.get('decision_emoji','')} {p.get('decision','')}",
-            "代码·名称": f"{p.get('code')} {p.get('name')}",
-            "个股分": p.get("stock_score"),
-            "机会分": p.get("opportunity_score"),
-            "现价": p.get("current_price"),
-            "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
-            "止损": p.get("stop_loss"),
-            "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
-            "RR": f"1:{p.get('risk_reward_1')}",
-            "仓位%": p.get("position_percent"),
-        })
-    df_show = pd.DataFrame(rows)
+    # 分组：买入列表（BUY_NOW/BUY_ON_PULLBACK）vs 关注列表（WATCH）
+    buy_plans = [p for p in res.plans if p.get("decision") in ("BUY_NOW", "BUY_ON_PULLBACK")]
+    watch_plans = [p for p in res.plans if p.get("decision") == "WATCH"]
+    market_tag = f" · 市场 {regime.state.value if regime else '—'}"
+
+    def _to_rows(plans: list) -> list:
+        out = []
+        for p in plans:
+            meta = p.get("meta") or {}
+            out.append({
+                "代码·名称": f"{p.get('code')} {p.get('name')}",
+                "板块": meta.get("sector") or "—",
+                "个股分": p.get("stock_score"),
+                "机会分": p.get("opportunity_score"),
+                "现价": p.get("current_price"),
+                "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
+                "止损": p.get("stop_loss"),
+                "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
+                "RR": f"1:{p.get('risk_reward_1')}",
+                "仓位%": p.get("position_percent"),
+            })
+        return out
+
+    tab_buy, tab_watch = st.tabs([f"🟢 买入列表（{len(buy_plans)}）", f"🟡 关注列表（{len(watch_plans)}）"])
+    with tab_buy:
+        if buy_plans:
+            st.dataframe(pd.DataFrame(_to_rows(buy_plans)), use_container_width=True, hide_index=True)
+        else:
+            st.info("当前无符合买入条件的标的（BUY_NOW / BUY_ON_PULLBACK）")
+    with tab_watch:
+        if watch_plans:
+            st.dataframe(pd.DataFrame(_to_rows(watch_plans)), use_container_width=True, hide_index=True)
+        else:
+            st.info("当前无关注标的（WATCH）")
+
+    st.caption(f"🎯 全市场初筛 {len(cands)} 只 → {len(res.plans)} 个有效计划{market_tag} · 耗时 {res.elapsed:.1f}s")
 
     # 让用户选一只看详情（默认推荐第一名）；plans 为原始 dict（英文 key）
-    codes_in_df = [(p.get("code"), p.get("name")) for p in res.plans]
+    codes_in_df = [(p.get("code"), p.get("name")) for p in buy_plans + watch_plans]
     labels = {f"{c} {n}": (c, n) for c, n in codes_in_df}
     default_label = next(iter(labels))
     sel = st.selectbox("🔍 选择查看详情", list(labels.keys()), index=0, key="rec_select")
     sel_code, sel_name = labels[sel]
-
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
 
     if res.failed:
         with st.expander(f"⚠️ {len(res.failed)} 只分析失败（数据源问题，不影响推荐）"):
@@ -176,7 +206,14 @@ st.subheader("🔍 单只详情")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | None, market_factor: float):
-    """单股深度分析（拉 K 线 + 估值/资金流 + 机会引擎 + 回测），缓存 15 分钟。"""
+    """单股深度分析（拉 K 线 + 估值/资金流/成长 + 板块 + 机会引擎 + 回测），缓存 15 分钟。"""
+    from quant_trading_system.stock_analysis.data_fetcher import fetch_growth_factors
+    from quant_trading_system.stock_analysis.sector import (
+        fetch_sector_rank,
+        get_stock_sectors,
+        sector_factor,
+    )
+
     info = detect_market(code)
     raw = fetch_kline(info, days=250)
     if raw is None or raw.empty:
@@ -214,12 +251,35 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
                 except (TypeError, ValueError):
                     pass
                 break
+
+    # Growth 成长因子（仅单票路径拉财务；失败忽略）
+    try:
+        g = fetch_growth_factors(info)
+        if g:
+            extra.update(g)
+    except Exception:  # noqa: BLE001
+        pass
     extra = {k: v for k, v in extra.items() if v is not None}
+
+    # Sector Rotation：板块强度因子（A股）
+    sector_map, sector_rank, stock_sector = {}, [], None
+    sector_score = None
+    try:
+        if info.market == "CN":
+            sector_map = get_stock_sectors()
+            sector_rank = fetch_sector_rank("CN")
+            stock_sector = sector_map.get(code)
+            if stock_sector:
+                sector_score = sector_factor(stock_sector, sector_rank)
+    except Exception:  # noqa: BLE001
+        sector_map, sector_rank = {}, []
 
     engine = OpportunityEngine(
         account_equity=account_eq,
         regime_score=regime_score,
         market_factor=market_factor,
+        sector_map=sector_map,
+        sector_rank=sector_rank,
     )
     plan_res = engine.analyze(code, name, df, extra=extra)
     if plan_res.plan is None:
@@ -228,7 +288,7 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
     bt = TradingPlanBacktest(engine=engine, stride=5)
     bt_res = bt.run(df, code, name)
 
-    return {"plan_res": plan_res, "df": df, "bt_res": bt_res}
+    return {"plan_res": plan_res, "df": df, "bt_res": bt_res, "stock_sector": stock_sector, "sector_score": sector_score}
 
 
 # ---- 单只详情（缓存命中时秒开；首次或过期时显示加载进度） ----
@@ -269,6 +329,15 @@ else:
     c2.metric("目标 T2", f"{p.target_2:.2f}" if p.target_2 else "—")
     c3.metric("目标 T3", f"{p.target_3:.2f}" if p.target_3 else "—")
     c4.metric("风险收益比", f"1:{p.risk_reward_1}" if p.risk_reward_1 else "—")
+
+    # 板块强度（Sector Rotation）
+    stock_sector = detail.get("stock_sector")
+    sector_score = detail.get("sector_score")
+    if stock_sector:
+        s1, s2 = st.columns(2)
+        s1.metric("所属板块", stock_sector)
+        s2.metric("板块强度", f"{sector_score:.0f}/100" if sector_score is not None else "—",
+                  help="板块涨跌幅/成交额百分位合成（0-100），强势板块候选加分")
 
     if p.reasons:
         st.markdown("**理由**")
