@@ -143,12 +143,22 @@ class MarketScheduler:
                     regime = mkt.get("regime")
                 except Exception as e:  # noqa: BLE001
                     log.warning("[%s] 市场状态获取失败，机会扫描用中性: %s", market, e)
-                # 候选源：股票池（main-v3 无全市场扫描）
-                candidates = pool
+                # 候选源：全市场初筛（A股/港股/美股），失败回退股票池
+                from .screener import screen_candidates
+
                 max_stocks = int(opp_cfg.get("max_stocks", 15))
-                candidates = candidates[:max_stocks]
+                try:
+                    cands = screen_candidates(
+                        market, top_n=max_stocks, config=self.cfg or {}
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.warning("[%s] 全市场初筛失败，回退股票池: %s", market, e)
+                    cands = []
+                candidates = cands or [
+                    {"code": c, "name": c} for c in pool[:max_stocks]
+                ]
                 if candidates:
-                    log.info("[%s] 批量机会扫描 %d 只 ...", market, len(candidates))
+                    log.info("[%s] 批量机会扫描 %d 只（初筛）...", market, len(candidates))
                     engine = OpportunityEngine(
                         account_equity=float(opp_cfg.get("account_equity", 100_000)),
                         regime_score=regime.score if regime else None,

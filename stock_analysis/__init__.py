@@ -15,6 +15,7 @@ from .holdings import Holdings
 from .indicators import add_all_indicators
 from .notifier import Notifier, build_market_message
 from .scheduler import MarketScheduler
+from .screener import screen_candidates
 
 __all__ = [
     "MarketInfo",
@@ -26,4 +27,5 @@ __all__ = [
     "build_market_message",
     "MarketScheduler",
     "Holdings",
+    "screen_candidates",
 ]

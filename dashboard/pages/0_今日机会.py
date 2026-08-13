@@ -44,19 +44,6 @@ require_login()
 page_header("今日机会", "每日投资决策 · V2", "Opportunity")
 
 ACCOUNT = 100_000  # 默认账户资金（元）
-DEFAULT_POOL = ["600000", "000001", "600036", "601318", "600519", "000858"]
-
-
-def _load_pool() -> list[str]:
-    """从 config/notify.yaml 的 stock_pools.CN 读股票池；失败回退默认池。"""
-    try:
-        cfg = load_yaml(str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml"))
-        pool = (cfg or {}).get("stock_pools", {}).get("CN") or []
-        if pool:
-            return [str(c).strip() for c in pool if str(c).strip()]
-    except Exception:  # noqa: BLE001
-        pass
-    return DEFAULT_POOL
 
 
 # --------------------------------------------------------------------------- #
@@ -91,45 +78,64 @@ st.divider()
 
 
 # --------------------------------------------------------------------------- #
-# 今日推荐（自动批量扫描股票池）
+# 今日推荐（全市场初筛 → 批量机会引擎）
 # --------------------------------------------------------------------------- #
 st.subheader("🎯 今日推荐")
-pool = _load_pool()
-account = st.number_input(
+mkt_choice = st.radio(
+    "市场",
+    ["CN", "HK", "US"],
+    index=0,
+    horizontal=True,
+    format_func={"CN": "🇨🇳 A股", "HK": "🇭🇰 港股", "US": "🇺🇸 美股"}.get,
+    help="全市场初筛（按成交额/涨跌幅/名称过滤）→ Top N → 机会引擎",
+)
+c1, c2 = st.columns([2, 1])
+account = c1.number_input(
     "账户资金（元）",
     value=ACCOUNT,
     step=10_000,
     key="rec_account",
     help="用于计算建议仓位（不影响评分与入场/止损/目标）",
 )
+top_n = c2.number_input("候选数量", value=30, min_value=5, max_value=80, step=5, key="rec_topn")
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def _scan_pool(pool_key: str, account_eq: float, regime_score: float | None, market_factor: float):
-    """缓存批量扫描结果 10 分钟，避免每次切 tab 都重拉 K 线。"""
-    codes = pool_key.split(",")
+def _scan_market(market: str, top_n: int, account_eq: float,
+                 regime_score: float | None, market_factor: float):
+    """全市场初筛 → 批量机会引擎（缓存 10 分钟，避免重复拉 K 线）。"""
+    from quant_trading_system.stock_analysis.screener import screen_candidates
+
+    cands = screen_candidates(market, top_n=top_n)
+    if not cands:
+        return [], None
     eng = OpportunityEngine(
         account_equity=account_eq,
         regime_score=regime_score,
         market_factor=market_factor,
     )
     scanner = OpportunityBatchScanner(engine=eng, workers=5)
-    return scanner.scan(codes, market="CN")
+    res = scanner.scan(cands, market=market)
+    return cands, res
 
 
-with st.spinner(f"⏳ 正在扫描 {len(pool)} 只候选股票，请稍候（约 3-10 秒）..."):
-    res = _scan_pool(
-        pool_key=",".join(pool),
-        account_eq=account,
-        regime_score=regime.score if regime else None,
-        market_factor=regime.factor if regime else 1.0,
+with st.spinner(f"⏳ 正在全市场初筛 {mkt_choice}（约 5-20 秒，首次较慢）..."):
+    cands, res = _scan_market(
+        mkt_choice, int(top_n), account,
+        regime.score if regime else None,
+        regime.factor if regime else 1.0,
     )
 
-st.success(f"✔ 扫描完成：股票池 {len(pool)} 只 → {len(res.plans)} 个有效计划（耗时 {res.elapsed:.1f}s）")
-
-if not res.plans:
-    st.warning("当前股票池无有效机会（可能全部 AVOID 或数据不足），可下方『自定义扫描』输入其他代码")
+if not cands:
+    st.warning("全市场快照不可用（网络/数据源问题），可下方『自定义扫描』输入代码")
+elif res is None:
+    st.warning("初筛无候选（可能行情源异常），可下方『自定义扫描』输入代码")
 else:
+    st.success(f"✔ 全市场初筛 {len(cands)} 只 → 机会引擎 {len(res.plans)} 个有效计划（耗时 {res.elapsed:.1f}s）")
+
+if cands and res is not None and not res.plans:
+    st.warning("当前市场无有效机会（可能全部 AVOID 或数据不足），可换市场或下方『自定义扫描』")
+elif cands and res is not None:
     rows = []
     for p in res.plans:
         rows.append({
@@ -226,15 +232,16 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
 
 
 # ---- 单只详情（缓存命中时秒开；首次或过期时显示加载进度） ----
+has_rec = cands and res is not None and bool(res.plans)
 with st.spinner(f"⏳ 正在深度分析 {sel_code}（K线/估值/资金流/回测）..."):
     detail = _analyze_one(
         sel_code, sel_name, account,
         regime.score if regime else None,
         regime.factor if regime else 1.0,
-    ) if res.plans else None
+    ) if has_rec else None
 
 if detail is None:
-    if not res.plans:
+    if not has_rec:
         st.info("当前未选中有效机会（推荐列表为空）")
     else:
         st.error(f"{sel_code} 数据不足，无法生成详情")
@@ -327,7 +334,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
                     market_factor=regime.factor if regime else 1.0,
                 )
                 scanner = OpportunityBatchScanner(engine=eng, workers=5)
-                custom_res = scanner.scan(codes, market="CN")
+                custom_res = scanner.scan(codes, market=mkt_choice)
             if custom_res.plans:
                 st.success(f"✔ 扫描完成：{len(custom_res.plans)} 个有效计划（AVOID 已过滤，耗时 {custom_res.elapsed:.1f}s）")
                 rows = []
