@@ -192,9 +192,12 @@ def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
             "总市值": "total_cap", "流通市值": "float_cap",
             "市盈率-动态": "pe", "换手率": "turnover", "市净率": "pb",
         })
+        # 注：akshare 升级后 stock_zh_a_spot() 可能不含市值/PE 等列（只有基础行情），
+        # 只对存在的列做转换，避免 KeyError 拖垮整个快照。
         for col in ("close", "pct_chg", "volume", "amount",
                     "total_cap", "float_cap", "pe", "turnover", "pb"):
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
         df["code"] = df["code"].astype(str).str.extract(r"(\d{6})")[0].str.zfill(6)
         keep = ["code", "name", "close", "pct_chg", "volume", "amount"]
         if "total_cap" in df.columns:
