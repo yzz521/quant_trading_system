@@ -1,10 +1,10 @@
-"""V2 今日机会 —— 围绕「每日投资决策」重设计的首页。
+"""V2 今日机会 —— 进入即看今日推荐，单只详情按需展开。
 
-功能：
-  * 市场状态卡片（Regime / 宽度 / 风险）
-  * 输入股票 → 完整交易计划（评分/入场/止损/目标/RR/仓位）
-  * AI 解读（无 AI key 时规则化兜底）
-  * 该股票的历史回测摘要（验证规则有效性）
+布局：
+  1. 📈 市场状态（自动）
+  2. 🎯 今日推荐（自动跑股票池批量扫描，AVOID 过滤，按机会分排序）
+  3. 🔍 单只详情（下拉选一只看评分/入场/止损/目标/RR/仓位 + AI 解读 + 历史回测）
+  4. 🛠 自定义扫描（手动输入任意代码备用）
 
 Run::
 
@@ -33,7 +33,10 @@ from quant_trading_system.stock_analysis.market import (
     calc_market_breadth,
     fetch_market_context,
 )
-from quant_trading_system.stock_analysis.opportunity import OpportunityEngine
+from quant_trading_system.stock_analysis.opportunity import (
+    OpportunityBatchScanner,
+    OpportunityEngine,
+)
 from quant_trading_system.utils import load_yaml
 
 apply_theme()
@@ -41,23 +44,34 @@ require_login()
 page_header("今日机会", "每日投资决策 · V2", "Opportunity")
 
 ACCOUNT = 100_000  # 默认账户资金（元）
+DEFAULT_POOL = ["600000", "000001", "600036", "601318", "600519", "000858"]
+
+
+def _load_pool() -> list[str]:
+    """从 config/notify.yaml 的 stock_pools.CN 读股票池；失败回退默认池。"""
+    try:
+        cfg = load_yaml(str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml"))
+        pool = (cfg or {}).get("stock_pools", {}).get("CN") or []
+        if pool:
+            return [str(c).strip() for c in pool if str(c).strip()]
+    except Exception:  # noqa: BLE001
+        pass
+    return DEFAULT_POOL
+
 
 # --------------------------------------------------------------------------- #
-# 市场状态
+# 市场状态（自动加载）
 # --------------------------------------------------------------------------- #
 st.subheader("📈 市场状态")
 try:
-    # 真实指数（上证指数）→ 市场状态/风险；全市场快照 → 宽度
     spot = None
     try:
         from quant_trading_system.stock_analysis.data_fetcher import fetch_spot_snapshot
-
         spot = fetch_spot_snapshot()
     except Exception:  # noqa: BLE001
         spot = None
 
     breadth = calc_market_breadth(spot) if spot is not None else None
-    # 指数失败时降级中性，不阻塞页面
     mkt = fetch_market_context("sh000001")
     regime = mkt.get("regime")
     risk = mkt.get("risk")
@@ -75,76 +89,160 @@ if regime is not None:
 
 st.divider()
 
+
 # --------------------------------------------------------------------------- #
-# 个股交易计划
+# 今日推荐（自动批量扫描股票池）
 # --------------------------------------------------------------------------- #
-st.subheader("🎯 个股交易计划")
-col1, col2, col3 = st.columns([1, 1, 1])
-code = col1.text_input("股票代码", "600000", help="A股 6 位代码")
-account = col2.number_input("账户资金（元）", value=ACCOUNT, step=10_000)
-run = col3.button("生成交易计划", type="primary", use_container_width=True)
+st.subheader("🎯 今日推荐")
+pool = _load_pool()
+account = st.number_input(
+    "账户资金（元）",
+    value=ACCOUNT,
+    step=10_000,
+    key="rec_account",
+    help="用于计算建议仓位（不影响评分与入场/止损/目标）",
+)
 
-if run:
-    with st.spinner(f"正在分析 {code} ..."):
-        try:
-            info = detect_market(code)
-            raw = fetch_kline(info, days=250)
-            if raw is None or raw.empty:
-                st.error(f"无法获取 {code} 行情")
-                st.stop()
-            df = add_all_indicators(raw)
 
-            # 从估值/资金流接口取 Stock Score 需要的 extra 数据（main-v3 无诊断模块）
-            val = fetch_valuation(info)
-            ff = fetch_fund_flow(info)
-            extra: dict = {}
+@st.cache_data(ttl=600, show_spinner=False)
+def _scan_pool(pool_key: str, account_eq: float, regime_score: float | None, market_factor: float):
+    """缓存批量扫描结果 10 分钟，避免每次切 tab 都重拉 K 线。"""
+    codes = pool_key.split(",")
+    eng = OpportunityEngine(
+        account_equity=account_eq,
+        regime_score=regime_score,
+        market_factor=market_factor,
+    )
+    scanner = OpportunityBatchScanner(engine=eng, workers=5)
+    return scanner.scan(codes, market="CN")
 
-            if val is not None and not val.empty:
-                row = val.iloc[-1]
-                pe = None
-                for col in ("pe_ttm", "total_pe", "pe"):
-                    if col in row.index:
-                        pe = row[col]
-                        break
-                mv = None
-                for col in ("total_mv", "market_cap"):
-                    if col in row.index:
-                        mv = row[col]
-                        break
-                if pe is not None and not pd.isna(pe):
-                    extra["pe"] = float(pe)
-                if mv is not None and not pd.isna(mv):
-                    extra["total_cap_yi"] = float(mv) / 1e8  # akshare 单位为元
 
-            if ff is not None and not ff.empty:
-                # 主力净流入列（列名含「主力」且「净额」）
-                for col in ff.columns:
-                    if "主力" in col and "净额" in col:
-                        try:
-                            net = float(ff[col].astype(float).tail(5).sum())
-                            extra["main_net"] = net
-                            extra["turnover"] = float(ff.iloc[-1].get("换手率", 0)) if "换手率" in ff.columns else None
-                        except (TypeError, ValueError):
-                            pass
-                        break
-            extra = {k: v for k, v in extra.items() if v is not None}
+with st.spinner(f"正在扫描 {len(pool)} 只候选 ..."):
+    res = _scan_pool(
+        pool_key=",".join(pool),
+        account_eq=account,
+        regime_score=regime.score if regime else None,
+        market_factor=regime.factor if regime else 1.0,
+    )
 
-            engine = OpportunityEngine(
-                account_equity=account,
-                regime_score=regime.score if regime else None,
-                market_factor=regime.factor if regime else 1.0,
-            )
-            res = engine.analyze(info.code, info.code, df, extra=extra)
-            if res.plan is None:
-                st.error("数据不足，无法生成交易计划")
-                st.stop()
-        except Exception as e:  # noqa: BLE001
-            st.error(f"分析失败: {e}")
-            st.stop()
+st.caption(f"股票池 {len(pool)} 只，耗时 {res.elapsed:.1f}s · {len(res.plans)} 只有效计划")
 
-    p = res.plan
-    emoji = p.decision.emoji
-    st.markdown(f"### {emoji} {p.name} ({p.code})　**{p.decision.value}**")
+if not res.plans:
+    st.warning("当前股票池无有效机会（可能全部 AVOID 或数据不足），可下方『自定义扫描』输入其他代码")
+else:
+    rows = []
+    for p in res.plans:
+        rows.append({
+            "决策": f"{p.get('decision_emoji','')} {p.get('decision','')}",
+            "代码·名称": f"{p.get('code')} {p.get('name')}",
+            "个股分": p.get("stock_score"),
+            "机会分": p.get("opportunity_score"),
+            "现价": p.get("current_price"),
+            "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
+            "止损": p.get("stop_loss"),
+            "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
+            "RR": f"1:{p.get('risk_reward_1')}",
+            "仓位%": p.get("position_percent"),
+        })
+    df_show = pd.DataFrame(rows)
+
+    # 让用户选一只看详情（默认推荐第一名）
+    codes_in_df = [(r["代码"], r["名称"]) for r in res.plans]
+    labels = {f"{c} {n}": (c, n) for c, n in codes_in_df}
+    default_label = next(iter(labels))
+    sel = st.selectbox("🔍 选择查看详情", list(labels.keys()), index=0, key="rec_select")
+    sel_code, sel_name = labels[sel]
+
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+    if res.failed:
+        with st.expander(f"⚠️ {len(res.failed)} 只分析失败（数据源问题，不影响推荐）"):
+            for f in res.failed:
+                st.write(f"- {f.get('name')}({f.get('code')}): {f.get('error')}")
+
+
+# --------------------------------------------------------------------------- #
+# 单只详情（根据选中股票展示）
+# --------------------------------------------------------------------------- #
+st.divider()
+st.subheader("🔍 单只详情")
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | None, market_factor: float):
+    """单股深度分析（拉 K 线 + 估值/资金流 + 机会引擎 + 回测），缓存 15 分钟。"""
+    info = detect_market(code)
+    raw = fetch_kline(info, days=250)
+    if raw is None or raw.empty:
+        return None
+    df = add_all_indicators(raw)
+
+    val = fetch_valuation(info)
+    ff = fetch_fund_flow(info)
+    extra: dict = {}
+
+    if val is not None and not val.empty:
+        row = val.iloc[-1]
+        pe = None
+        for col in ("pe_ttm", "total_pe", "pe"):
+            if col in row.index:
+                pe = row[col]
+                break
+        mv = None
+        for col in ("total_mv", "market_cap"):
+            if col in row.index:
+                mv = row[col]
+                break
+        if pe is not None and not pd.isna(pe):
+            extra["pe"] = float(pe)
+        if mv is not None and not pd.isna(mv):
+            extra["total_cap_yi"] = float(mv) / 1e8  # akshare 单位为元
+
+    if ff is not None and not ff.empty:
+        for col in ff.columns:
+            if "主力" in col and "净额" in col:
+                try:
+                    net = float(ff[col].astype(float).tail(5).sum())
+                    extra["main_net"] = net
+                    extra["turnover"] = float(ff.iloc[-1].get("换手率", 0)) if "换手率" in ff.columns else None
+                except (TypeError, ValueError):
+                    pass
+                break
+    extra = {k: v for k, v in extra.items() if v is not None}
+
+    engine = OpportunityEngine(
+        account_equity=account_eq,
+        regime_score=regime_score,
+        market_factor=market_factor,
+    )
+    plan_res = engine.analyze(code, name, df, extra=extra)
+    if plan_res.plan is None:
+        return None
+
+    bt = TradingPlanBacktest(engine=engine, stride=5)
+    bt_res = bt.run(df, code, name)
+
+    return {"plan_res": plan_res, "df": df, "bt_res": bt_res}
+
+
+detail = _analyze_one(
+    sel_code, sel_name, account,
+    regime.score if regime else None,
+    regime.factor if regime else 1.0,
+) if res.plans else None
+
+if detail is None:
+    if not res.plans:
+        st.info("当前未选中有效机会（推荐列表为空）")
+    else:
+        st.error(f"{sel_code} 数据不足，无法生成详情")
+else:
+    plan_res = detail["plan_res"]
+    df = detail["df"]
+    bt_res = detail["bt_res"]
+    p = plan_res.plan
+
+    st.markdown(f"### {p.decision.emoji} {p.name} ({p.code})　**{p.decision.value}**")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("个股评分", f"{p.stock_score}/100")
@@ -174,23 +272,16 @@ if run:
     if p.invalidate_condition:
         st.warning(f"失效条件: {p.invalidate_condition}")
 
-    # ---- AI 解读 ----
-    st.divider()
     st.markdown("#### 🤖 AI 解读")
+    try:
+        cfg = load_yaml(str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml"))
+    except Exception:  # noqa: BLE001
+        cfg = None
     with st.spinner("AI 解读中..."):
-        try:
-            cfg = load_yaml(str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml"))
-        except Exception:  # noqa: BLE001
-            cfg = None
         ai_text = explain_plan(p, notify_cfg=cfg)
     st.markdown(ai_text)
 
-    # ---- 历史回测 ----
-    st.divider()
     st.markdown("#### 📊 历史规则回测")
-    with st.spinner("回测中..."):
-        bt = TradingPlanBacktest(engine=engine, stride=5)
-        bt_res = bt.run(df, info.code, info.code)
     if bt_res.metrics and bt_res.metrics.sample_size > 0:
         m = bt_res.metrics
         r1, r2, r3, r4 = st.columns(4)
@@ -207,57 +298,56 @@ if run:
     else:
         st.info("样本不足，未生成回测。")
 
-# --------------------------------------------------------------------------- #
-# 批量机会扫描
-# --------------------------------------------------------------------------- #
-st.divider()
-st.subheader("📋 批量机会扫描")
-bcol1, bcol2, bcol3 = st.columns([2, 1, 1])
-batch_input = bcol1.text_input(
-    "候选股票代码（逗号分隔）",
-    "600000, 000001, 600519, 601318",
-    help="逐个跑机会引擎，输出按机会分排序的交易计划（过滤 AVOID）",
-)
-batch_account = bcol2.number_input("批量账户资金（元）", value=ACCOUNT, step=10_000)
-batch_run = bcol3.button("批量扫描", type="secondary", use_container_width=True)
 
-if batch_run:
-    codes = [c.strip() for c in batch_input.replace("，", ",").split(",") if c.strip()]
-    if not codes:
-        st.warning("请输入至少一个股票代码")
-    else:
-        with st.spinner(f"批量分析 {len(codes)} 只 ..."):
-            from quant_trading_system.stock_analysis.opportunity import OpportunityBatchScanner
+# --------------------------------------------------------------------------- #
+# 自定义扫描（备用：手动输入任意代码）
+# --------------------------------------------------------------------------- #
+with st.expander("🛠 自定义扫描（手动输入任意代码）"):
+    bcol1, bcol2, bcol3 = st.columns([2, 1, 1])
+    batch_input = bcol1.text_input(
+        "候选股票代码（逗号分隔）",
+        "600000, 000001, 600519",
+        key="custom_codes",
+        help="逐个跑机会引擎，输出按机会分排序的交易计划（过滤 AVOID）",
+    )
+    custom_account = bcol2.number_input("账户资金（元）", value=account, step=10_000, key="custom_account")
+    batch_run = bcol3.button("扫描", type="secondary", use_container_width=True, key="custom_run")
 
-            engine = OpportunityEngine(
-                account_equity=batch_account,
-                regime_score=regime.score if regime else None,
-                market_factor=regime.factor if regime else 1.0,
-            )
-            scanner = OpportunityBatchScanner(engine=engine, workers=5)
-            res = scanner.scan(codes, market="CN")
-        if res.plans:
-            st.success(f"生成 {len(res.plans)} 个有效计划（AVOID 已过滤）")
-            rows = []
-            for p in res.plans:
-                rows.append({
-                    "决策": f"{p.get('decision_emoji','')} {p.get('decision','')}",
-                    "代码": p.get("code"),
-                    "名称": p.get("name"),
-                    "个股分": p.get("stock_score"),
-                    "机会分": p.get("opportunity_score"),
-                    "现价": p.get("current_price"),
-                    "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
-                    "止损": p.get("stop_loss"),
-                    "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
-                    "风险收益": f"1:{p.get('risk_reward_1')}",
-                    "仓位%": p.get("position_percent"),
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    if batch_run:
+        codes = [c.strip() for c in batch_input.replace("，", ",").split(",") if c.strip()]
+        if not codes:
+            st.warning("请输入至少一个股票代码")
         else:
-            st.warning("本轮无有效机会（可能全部 AVOID 或数据不足）")
-        if res.failed:
-            with st.expander(f"⚠️ {len(res.failed)} 只分析失败"):
-                for f in res.failed:
-                    st.write(f"- {f.get('name')}({f.get('code')}): {f.get('error')}")
-        st.caption(f"耗时 {res.elapsed:.1f}s")
+            with st.spinner(f"批量分析 {len(codes)} 只 ..."):
+                eng = OpportunityEngine(
+                    account_equity=custom_account,
+                    regime_score=regime.score if regime else None,
+                    market_factor=regime.factor if regime else 1.0,
+                )
+                scanner = OpportunityBatchScanner(engine=eng, workers=5)
+                custom_res = scanner.scan(codes, market="CN")
+            if custom_res.plans:
+                st.success(f"生成 {len(custom_res.plans)} 个有效计划（AVOID 已过滤）")
+                rows = []
+                for p in custom_res.plans:
+                    rows.append({
+                        "决策": f"{p.get('decision_emoji','')} {p.get('decision','')}",
+                        "代码": p.get("code"),
+                        "名称": p.get("name"),
+                        "个股分": p.get("stock_score"),
+                        "机会分": p.get("opportunity_score"),
+                        "现价": p.get("current_price"),
+                        "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
+                        "止损": p.get("stop_loss"),
+                        "目标T1/T2": f"{p.get('target_1')}/{p.get('target_2')}",
+                        "RR": f"1:{p.get('risk_reward_1')}",
+                        "仓位%": p.get("position_percent"),
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            else:
+                st.warning("本轮无有效机会（可能全部 AVOID 或数据不足）")
+            if custom_res.failed:
+                with st.expander(f"⚠️ {len(custom_res.failed)} 只分析失败"):
+                    for f in custom_res.failed:
+                        st.write(f"- {f.get('name')}({f.get('code')}): {f.get('error')}")
+            st.caption(f"耗时 {custom_res.elapsed:.1f}s")
