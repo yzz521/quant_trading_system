@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import pandas as pd
+from quant_trading_system.stock_analysis.data_fetcher import detect_market
 from quant_trading_system.stock_analysis.opportunity import OpportunityBatchScanner
 from quant_trading_system.stock_analysis.opportunity.batch_scanner import _default_loader
 from quant_trading_system.stock_analysis.opportunity.trading_plan import DecisionState, TradingPlan
@@ -40,6 +41,28 @@ class TestDefaultLoader:
             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("网络失败")),
         )
         assert _default_loader("600000") is None
+
+    def test_multi_market_detect_routes(self):
+        """detect_market 对三市场识别正确（跨市场 loader 的路由基础）。"""
+        assert detect_market("600000").market == "CN"
+        assert detect_market("000001").market == "CN"
+        assert detect_market("00700").market == "HK"
+        assert detect_market("09988").market == "HK"
+        assert detect_market("AAPL").market == "US"
+        assert detect_market("MSFT").market == "US"
+
+    def test_default_loader_fails_non_cn(self, monkeypatch):
+        """回归：默认 loader 只走新浪 CN 接口，对 US/HK 代码会失败/返回 None。
+
+        这解释了为何修复前美股/港股批量扫描恒为空——页面已改用
+        跨市场 loader（CN=新浪 / US=yfinance / HK=akshare）。
+        """
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.opportunity.batch_scanner.fetch_kline_sina_api",
+            lambda *a, **kw: None,
+        )
+        # HK 5 位纯数字（00700）被 detect_market 判为 HK → 但仍走新浪接口 → 返回 None
+        assert _default_loader("00700") is None
 
 
 class _FakeEngine:
