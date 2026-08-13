@@ -1,8 +1,8 @@
-# GP助手推送配置（模板）
+# GP助手推送配置（模板）· main-v3
 # 使用方式：复制为 config/notify.yaml 并填入你的凭证
 #   cp config/notify.yaml.example config/notify.yaml
 
-# 自选股池（定时诊断这些股票）
+# 自选股池（全市场初筛失败时的回退候选）
 stock_pools:
   CN: ["600519", "000001"]
   US: ["AAPL", "TSLA"]
@@ -11,49 +11,14 @@ stock_pools:
 # 启用的市场：只推送这些市场的分析（CN=A股 HK=港股 US=美股），可组合
 enabled_markets: ["CN", "HK", "US"]
 
-# 全市场扫描（与自选股诊断同时推送）
-scan:
-  enabled: true
-  conditions: ["多头排列", "MACD金叉", "突破新高", "放量", "超卖"]
-  cn_pool: []
-  cn_universe_limit: 300    # 0=扫全部A股(很慢)，建议 100-300
-  us_pool: ["AAPL", "MSFT", "TSLA"]
-  hk_pool: ["00700", "09988"]
-
-# V2 今日机会：对候选股批量生成交易计划，随每日邮件推送「今日机会」区块
+# 今日机会：全市场初筛（A股/港股/美股）→ 机会引擎 → 交易计划，随每日邮件推送
 opportunity:
-  enabled: false            # 开启后每日邮件将包含交易计划（评分/入场/止损/目标/仓位）
+  enabled: false            # 开启后每日邮件将包含「今日机会 · 交易计划」区块
   index_symbol: "sh000001"  # 市场状态参考指数（上证指数；沪深300 用 sh000300）
-  max_stocks: 15            # 候选上限（优先用扫描命中，其次股票池）
+  max_stocks: 15            # 候选上限（全市场初筛 Top N）
   account_equity: 100000    # 账户资金（元），用于计算建议仓位
   workers: 5                # 并发拉取数（行情接口敏感，不宜太高）
   min_opportunity_score: 0  # 机会分下限，过滤弱机会（0=不过滤）
-
-# 收盘漏斗（全市场四层过滤 → Top N 关注池）
-funnel:
-  enabled: true
-  top_n: 10                 # 每天输出的关注池数量
-  min_amount: 50000000      # L1 日成交额下限（元）
-  min_market_cap: 50        # L2 总市值下限（亿元）
-  pe_min: 0                 # L2 PE 区间（0 < PE < 100）
-  pe_max: 100
-  min_turnover: 0.3         # L2 换手率下限（%）
-  l3_limit: 80              # L3 技术面后进入 L4 的候选数
-  l3_conditions: ["多头排列(新晋)", "MACD金叉", "突破新高", "放量", "超卖", "RSI健康"]
-  l2_fallback_spot: true    # 腾讯行情失败时用新浪快照做 L2 过滤（避免漏斗中断）
-  industry_diversify:
-    enabled: true           # 行业分散：Top10 里同行业最多 N 只（新浪行业，7天缓存）
-    max_per_industry: 3
-  # L4 新闻风险层：近7天新闻/公告标题命中关键词则降分并标注（如 000056 的诉讼公告）
-  news_enabled: true
-  news_sources: ["eastmoney", "xueqiu", "sina"]   # 多源顺序；单源失败自动跳过，新浪兜底
-  news_sentiment:
-    enabled: true           # 新闻标题情绪标注（偏多/偏空/中性）
-  news_days: 7
-  news_penalty: 15
-  news_risk_keywords: ["诉讼", "立案", "减持", "质押", "冻结", "处罚", "违规", "问询",
-                       "风险警示", "退市", "终止上市", "调查", "仲裁", "合同纠纷",
-                       "业绩预亏", "商誉减值", "监管函", "关注函"]
 
 # 交易监听：从 macOS 通知中心识别券商成交消息，自动同步持仓
 # 使用前提：1) 系统设置→隐私与安全性→完全磁盘访问 给终端/IDE授权
@@ -98,19 +63,9 @@ schedule:
   ushk_interval_min: 10      # 美股/港股：每 10 分钟
   us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
   poll_interval_sec: 60      # 调度器主循环检查间隔
-  # 每日收盘漏斗：交易日 15:10 后跑一次全市场四层过滤，Top10 落盘并推送邮件
-  daily_funnel:
-    enabled: true
-    time: "15:10"
-  # 每周五 15:30 自动生成 A股周报（PDF 邮件附件 + 本地存档 results/weekly/）
-  weekly_report:
-    enabled: true
-    day: "fri"
-    time: "15:30"
 
-
-# AI 点评（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI
-# 只根据本系统已算好的持仓与动作写人话，不替代买卖决策
+# AI 解读（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI
+# 只根据本系统已算好的交易计划写人话，不替代买卖决策
 ai:
   enabled: false
   api_key: ""                    # 或环境变量 QTS_AI_API_KEY
@@ -119,18 +74,3 @@ ai:
   timeout: 60
   max_tokens: 1200
   temperature: 0.3
-
-# 本地 Vibe-Trading 二次分析（发邮件时可选；需本机 serve）
-vibe:
-  enabled: false
-  on_email: true
-  candidate_count: 15     # 每次给 Vibe 的扫描候选数量（结果落盘 results/latest_scan.json）
-  base_url: "http://127.0.0.1:8899"
-  auth_key: ""
-  max_wait_sec: 360       # Vibe 生成常需 3-5 分钟，120 秒经常等不到
-  poll_sec: 3
-  # Vibe 失败/超时后，用 AI 点评的 DeepSeek（OpenAI 兼容）兜底生成二次分析
-  fallback_llm: true
-  fallback_model: ""          # 留空使用 ai.model
-  fallback_max_tokens: 3000
-  fallback_timeout: 180
