@@ -146,8 +146,8 @@ else:
         })
     df_show = pd.DataFrame(rows)
 
-    # 让用户选一只看详情（默认推荐第一名）
-    codes_in_df = [(r["代码"], r["名称"]) for r in res.plans]
+    # 让用户选一只看详情（默认推荐第一名）；plans 为原始 dict（英文 key）
+    codes_in_df = [(p.get("code"), p.get("name")) for p in res.plans]
     labels = {f"{c} {n}": (c, n) for c, n in codes_in_df}
     default_label = next(iter(labels))
     sel = st.selectbox("🔍 选择查看详情", list(labels.keys()), index=0, key="rec_select")
