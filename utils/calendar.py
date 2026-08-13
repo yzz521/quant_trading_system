@@ -7,8 +7,7 @@ research workflow the simple version below is sufficient and dependency-free.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Iterable
+from datetime import date, timedelta
 
 import pandas as pd
 

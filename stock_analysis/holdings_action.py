@@ -1,8 +1,6 @@
 """持仓动作建议：卖出区间 / 回补参考 / 加仓条件（研究辅助，非投资建议）。"""
 from __future__ import annotations
 
-from typing import Any, Optional
-
 from ..utils import get_logger
 from .sell_zone import analyze_sell_zone
 
@@ -21,7 +19,7 @@ def _add_position_hint(row: dict, zone: dict) -> str:
     if regime == "deep_loss" or pnl <= -20:
         return (
             "深套：优先反弹减仓，不宜盲目摊薄；"
-            f"第一目标附近可分批减，回本前控制仓位。"
+            "第一目标附近可分批减，回本前控制仓位。"
         )
     if pnl >= 10:
         return (

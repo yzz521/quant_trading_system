@@ -13,11 +13,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from quant_trading_system.utils import load_yaml
 from quant_trading_system.stock_analysis.holdings import Holdings
-from quant_trading_system.stock_analysis.scheduler_state import format_status_text, load_state
 from quant_trading_system.stock_analysis.notifier import Notifier
-
+from quant_trading_system.stock_analysis.scheduler_state import format_status_text
+from quant_trading_system.utils import load_yaml
 
 DEFAULT_NOTIFY = str(Path(__file__).resolve().parents[1] / "config" / "notify.yaml")
 

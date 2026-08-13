@@ -135,7 +135,7 @@ def verify_token(token: str, cfg: Optional[dict] = None) -> Optional[str]:
 
 
 def _read_cookie(name: str = _COOKIE_NAME) -> Optional[str]:
-    # Streamlit 1.37+ 
+    # Streamlit 1.37+
     try:
         cookies = st.context.cookies
         if cookies is not None:
@@ -337,7 +337,7 @@ def require_login(page_title: str = "量化交易系统") -> bool:
                 st.success("登录成功，正在进入…")
                 st.rerun()
             st.error("用户名或密码错误")
-        st.caption("默认示例见 config/users.yaml.example，生产请改密并设置 session_secret。")
+        st.caption("默认账号见 config/users.yaml（不存在时自动放行），生产请改密并设置 session_secret。")
     st.stop()
     return False
 

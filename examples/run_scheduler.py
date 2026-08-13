@@ -33,16 +33,11 @@ def main() -> None:
     parser.add_argument("--test", action="store_true", help="立即执行一次（不等调度）")
     parser.add_argument("--market", default=None, choices=["CN", "US", "HK", None],
                         help="测试时指定市场（默认所有开盘市场）")
-    parser.add_argument("--once-daily", action="store_true",
-                        help="立即执行一次收盘漏斗（全市场四层过滤 + 推送）")
     args = parser.parse_args()
 
     scheduler = MarketScheduler(args.config)
 
-    if args.once_daily:
-        print("=== 收盘漏斗模式（全市场四层过滤） ===")
-        scheduler.run_funnel_once()
-    elif args.test:
+    if args.test:
         print("=== 当前时段状态 ===")
         for m, open_ in scheduler.session_status().items():
             print(f"  {m}: {'开盘' if open_ else '休市'}")

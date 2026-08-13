@@ -28,10 +28,8 @@ Safety
 """
 from __future__ import annotations
 
-import plistlib
 import re
 import sqlite3
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -320,174 +318,17 @@ class TradeParser:
 # ---------------------------------------------------------------------- #
 # 通知中心读取器
 # ---------------------------------------------------------------------- #
-class NotificationReader:
-    """Incremental reader over the macOS notification-centre SQLite DB.
-
-    The DB schema differs slightly between macOS releases, so the table/columns
-    are probed at runtime instead of hard-coded.
-    """
-
-    def __init__(self, db_path: str = DEFAULT_NOTIFY_DB) -> None:
-        self.db_path = Path(db_path).expanduser()
-
-    def open(self) -> sqlite3.Connection:
-        if not self.db_path.exists():
-            raise FileNotFoundError(
-                f"通知中心数据库不存在: {self.db_path}\n"
-                "（macOS 版本可能不受支持）"
-            )
-        try:
-            # 只读连接，绝不给系统库加锁/写
-            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.OperationalError as e:
-            raise PermissionError(
-                "读取通知中心数据库被拒绝。请在 系统设置 → 隐私与安全性 → "
-                "完全磁盘访问 中勾选当前终端/IDE，然后重试。\n"
-                f"原始错误: {e}"
-            ) from e
-
-    @staticmethod
-    def probe(conn: sqlite3.Connection) -> dict:
-        """Detect the notification schema at runtime.
-
-        macOS 26+ stores each notification as a binary plist in the ``record``
-        table (``data`` column), with the bundle id in the ``app`` table.
-        Older macOS (Big Sur~Sonoma) store plain ``title/body/date`` columns.
-        Returns a dict describing how to read the DB.
-        """
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")]
-
-        def cols(t: str) -> list[str]:
-            try:
-                return [r[1].lower() for r in
-                        conn.execute(f'PRAGMA table_info("{t}")')]
-            except sqlite3.OperationalError:
-                return []
-
-        # 新结构（macOS 26+）：record.data 为 bplist，app.identifier 为 bundle id
-        if "record" in tables and "app" in tables:
-            c_r, c_a = cols("record"), cols("app")
-            if ({"rec_id", "app_id", "data"} <= set(c_r)
-                    and "identifier" in c_a):
-                return {"mode": "plist", "table": "record",
-                        "id_col": "rec_id", "date_col": "delivered_date",
-                        "app_fk": "app_id", "app_ident": "identifier"}
-
-        # 旧结构：含 title/body/date 列的表
-        for t in tables:
-            if t.startswith("sqlite_"):
-                continue
-            c = cols(t)
-            if {"title", "body", "date"} <= set(c):
-                return {"mode": "plain", "table": t, "id_col": "rowid",
-                        "date_col": "date", "app_fk": None, "app_ident": None}
-
-        raise RuntimeError(
-            "未在通知中心数据库中找到通知表。"
-            f"已扫描的表: {[t for t in tables if not t.startswith('sqlite_')][:20]}"
-        )
-
-    @staticmethod
-    def _parse_plist(data: bytes) -> dict:
-        """Extract title/body/date from a notification bplist (any nesting)."""
-        try:
-            p = plistlib.loads(data)
-        except Exception:  # noqa: BLE001
-            return {}
-        out: dict = {}
-        stack = [p]
-        while stack:
-            d = stack.pop()
-            if isinstance(d, dict):
-                for k, v in d.items():
-                    if k in ("titl", "title", "body", "date", "subt"):
-                        if v and k not in out:
-                            out[k] = v
-                    elif isinstance(v, (dict, list)):
-                        stack.append(v)
-            elif isinstance(d, list):
-                stack.extend(x for x in d if isinstance(x, (dict, list)))
-        return out
-
-    def fetch_new(self, last_rowid: int, app_filter: Optional[list[str]] = None,
-                  lookback_min: int = 0) -> list[dict]:
-        """Return notifications with rowid > last_rowid (newest first).
-
-        ``app_filter`` — only rows whose app column starts with one of these
-        (usually the WeChat bundle id). ``lookback_min`` limits how far back
-        we scan on the *first* run (0 = no limit).
-        """
-        with self.open() as conn:
-            s = self.probe(conn)
-            table = s["table"]
-            id_col = s["id_col"]
-            date_col = s["date_col"]
-            where: list[str] = [f"{id_col} > ?"]
-            params: list = [last_rowid]
-
-            if s["mode"] == "plist":
-                # record JOIN app（app.identifier 是 bundle id，LIKE 前缀匹配）
-                sql = (f"SELECT r.{id_col}, r.{date_col}, r.data, "
-                       f"COALESCE(a.{s['app_ident']}, '') AS app_id "
-                       f"FROM {table} r LEFT JOIN app a ON r.{s['app_fk']} = a.app_id")
-                if app_filter:
-                    conds = " OR ".join("a.identifier LIKE ?" for _ in app_filter)
-                    where.append(f"({conds})")
-                    params += [f"{a}%" for a in app_filter]
-            else:
-                sql = (f"SELECT {id_col} AS rowid, title, body, {date_col} AS date "
-                       f"FROM {table}")
-
-            if lookback_min:
-                # 通知中心时间戳是 Cocoa epoch（2001-01-01 起秒）
-                cutoff = (datetime.now(timezone.utc) - timedelta(minutes=lookback_min)
-                          - COCOA_EPOCH).total_seconds()
-                where.append(f"{date_col} >= ?")
-                params.append(cutoff)
-
-            sql += " WHERE " + " AND ".join(where) + f" ORDER BY {id_col} DESC LIMIT 500"
-            rows = []
-            for r in conn.execute(sql, params):
-                row = dict(r)
-                row["_table"] = table
-                if s["mode"] == "plist":
-                    # 从 bplist 里解出 title/body/date
-                    p = self._parse_plist(row.pop("data", b""))
-                    row["title"] = p.get("titl") or p.get("title") or ""
-                    row["body"] = p.get("body") or ""
-                    row["date"] = p.get("date") or row.pop(date_col, None)
-                else:
-                    row["rowid"] = int(row.get("rowid"))
-                rows.append(row)
-            return rows
-
-    @staticmethod
-    def to_beijing(cocoa_ts: float) -> str:
-        """Convert a notification-centre timestamp (seconds since 2001-01-01
-        UTC) to a Beijing-time string. Tolerant of None/0."""
-        try:
-            if not cocoa_ts:
-                return ""
-            return (COCOA_EPOCH + timedelta(seconds=float(cocoa_ts))
-                    ).astimezone(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
-        except (TypeError, ValueError, OverflowError):
-            return ""
-
-
 # ---------------------------------------------------------------------- #
 # 监听器：读取 → 解析 → 同步持仓
 # ---------------------------------------------------------------------- #
 class TradeMonitor:
-    """Watch notifications, parse trades, keep Holdings in sync.
+    """解析成交文本并同步持仓（main-v3 精简版：仅 parser + apply_trade）。
 
     Usage::
 
         mon = TradeMonitor()
-        applied, skipped = mon.process_once()   # one poll cycle
-        mon.run_forever()                       # loop until Ctrl-C
+        t = mon.parser.parse("...成交文本...")   # → TradeAction
+        mon.apply_trade(t)                       # 写入持仓
     """
 
     def __init__(self, config_path: str = "config/notify.yaml",
@@ -495,8 +336,6 @@ class TradeMonitor:
         cfg = load_yaml(config_path) or {}
         tcfg = cfg.get("trade_monitor", {}) or {}
 
-        self.reader = NotificationReader(notify_db or tcfg.get("notify_db")
-                                         or DEFAULT_NOTIFY_DB)
         self.parser = TradeParser(tcfg)
         self.app_filter = tcfg.get("whitelist_apps") or DEFAULT_WHITELIST_APPS
         self.auto_sync = bool(tcfg.get("auto_sync", True))
@@ -589,85 +428,7 @@ class TradeMonitor:
         return "US"
 
     # ------------------------------------------------------------------ #
-    def process_once(self) -> tuple[list[dict], list[dict]]:
-        """Run one poll cycle. Returns (applied, skipped) — lists of
-        {action, message, code, name, raw} dicts for logging."""
-        applied: list[dict] = []
-        skipped: list[dict] = []
-        last = self._last_rowid()
-
-        try:
-            notifs = self.reader.fetch_new(
-                last, app_filter=self.app_filter, lookback_min=self.lookback_min)
-        except (PermissionError, FileNotFoundError, RuntimeError) as e:
-            log.error("%s", e)
-            return applied, [{"action": "ERROR", "message": str(e)}]
-
-        for n in notifs:
-            nrow = int(n["rowid"])
-            ts = self.reader.to_beijing(n.get("date"))
-            title = n.get("title") or ""
-            body = n.get("body") or ""
-            raw = f"{title} {body}".strip()
-            app = n.get("app_id") or ""
-
-            # 微信通知预览关闭：通知中心只有占位文案，提示一次
-            if (not self._preview_warned and app
-                    and app.lower().startswith("com.tencent.xinwechat")
-                    and any(m in raw for m in self._HIDDEN_BODY_MARKERS)):
-                log.warning(
-                    "检测到历史微信通知只有占位文案（'%s'）——这是之前"
-                    "通知预览关闭时存入的。请确认：1) macOS 系统设置 → 通知 "
-                    "→ 微信 → 通知预览 选【始终】；2) 微信服务号/公众号消息"
-                    "是否在 Mac 上弹通知（服务号消息默认不弹，成交通知需确认"
-                    "券商服务号推送方式）。", body[:30])
-                self._preview_warned = True
-
-            trade = self.parser.parse(raw, ts=ts)
-            if not trade:
-                self._record(nrow, app, ts, raw, "", "", "", 0, 0,
-                             "SKIPPED_NOT_TRADE", "非成交消息")
-                skipped.append({"action": "SKIPPED_NOT_TRADE",
-                                "message": f"[{ts}] {raw[:80]}"})
-                continue
-
-            try:
-                action, msg = self.apply_trade(trade)
-            except Exception as e:  # noqa: BLE001
-                action, msg = "ERROR", f"写入持仓失败: {e}"
-                log.exception("处理成交消息失败: %s", raw[:120])
-
-            self._record(nrow, app, ts, raw, trade.side, trade.code, trade.name,
-                         trade.quantity, trade.price, action, msg)
-            log.info("[%s] %s | %s", action, trade.code, msg)
-            if action.startswith("APPLIED"):
-                applied.append({"action": action, "message": msg,
-                                "code": trade.code, "name": trade.name,
-                                "side": trade.side, "raw": raw})
-            else:
-                skipped.append({"action": action, "message": msg,
-                                "code": trade.code, "raw": raw})
-        return applied, skipped
-
     # ------------------------------------------------------------------ #
-    def run_forever(self) -> None:
-        """Poll indefinitely. Prints a heartbeat line every cycle."""
-        print("=== 交易监听常驻模式 ===")
-        print(f"通知源: {self.reader.db_path}")
-        print(f"持仓库: {self.holdings.db_path}")
-        print(f"轮询间隔: {self.poll_interval}s  Ctrl-C 退出\n")
-        while True:
-            try:
-                applied, skipped = self.process_once()
-                if applied:
-                    print(f"[{datetime.now(BEIJING):%H:%M:%S}] 同步 {len(applied)} 笔成交:")
-                    for a in applied:
-                        print(f"  ✔ {a['message']}")
-            except Exception as e:  # noqa: BLE001
-                log.error("监听循环异常: %s", e)
-            time.sleep(self.poll_interval)
-
-
 # ---------------------------------------------------------------------- #
 # 自测：解析器在各种消息形态下的表现
 # ---------------------------------------------------------------------- #
@@ -690,68 +451,4 @@ _SELF_TEST_CASES = [
     ("【同花顺】早盘三大指数集体高开，沪指涨0.3%",
      None, None, 0, 0),
 ]
-
-
-def self_test() -> int:
-    """Run the parser against sample messages. Returns number of failures."""
-    parser = TradeParser()
-    fails = 0
-    print("=== 解析器自测 ===")
-    for text, exp_side, exp_code, exp_qty, exp_price in _SELF_TEST_CASES:
-        r = parser.parse(text)
-        if exp_side is None:
-            ok = r is None
-            print(f"  {'✔' if ok else '✘'} 非成交: {text[:40]}... → {r}")
-            fails += 0 if ok else 1
-            continue
-        ok = (r is not None and r.side == exp_side and r.code == exp_code
-              and abs(r.quantity - exp_qty) < 1e-6
-              and abs(r.price - exp_price) < 1e-6)
-        detail = f"{r.side} {r.code} {r.name} {r.quantity}股 @{r.price}" if r else "None"
-        print(f"  {'✔' if ok else '✘'} {text[:46]}... → {detail}")
-        fails += 0 if ok else 1
-
-    # 加权成本 / 清仓逻辑自测
-    print("\n=== 持仓同步自测（用临时库） ===")
-    import tempfile
-    tmp = tempfile.mkdtemp()
-    db = Path(tmp) / "holdings.db"
-    h = Holdings(str(db))
-    mon = TradeMonitor.__new__(TradeMonitor)
-    mon.holdings = h
-
-    h.add("601398", name="工商银行", cost_price=5.0, quantity=1000)
-    t1 = TradeAction(side="BUY", code="601398", name="工商银行",
-                     quantity=100, price=6.0)
-    a1, m1 = mon.apply_trade(t1)
-    pos = h.all()[0]
-    ok1 = a1 == "APPLIED" and pos["quantity"] == 1100 and abs(pos["cost_price"] - 5.09) < 0.01
-    print(f"  {'✔' if ok1 else '✘'} 加仓加权: {m1} | 成本 {pos['cost_price']}")
-
-    t2 = TradeAction(side="SELL", code="601398", name="工商银行",
-                     quantity=200, price=6.5)
-    a2, m2 = mon.apply_trade(t2)
-    pos = h.all()[0]
-    ok2 = a2 == "APPLIED" and pos["quantity"] == 900
-    print(f"  {'✔' if ok2 else '✘'} 减仓: {m2}")
-
-    t3 = TradeAction(side="SELL", code="601398", name="工商银行",
-                     quantity=900, price=7.0)
-    a3, m3 = mon.apply_trade(t3)
-    ok3 = a3 == "APPLIED_DELETE" and h.is_empty()
-    print(f"  {'✔' if ok3 else '✘'} 清仓删除: {m3}")
-
-    t4 = TradeAction(side="SELL", code="000001", name="平安银行",
-                     quantity=100, price=11.0)
-    a4, m4 = mon.apply_trade(t4)
-    ok4 = a4 == "SKIPPED_NO_HOLDING"
-    print(f"  {'✔' if ok4 else '✘'} 无持仓卖出: {m4}")
-
-    fails += sum(0 if x else 1 for x in (ok1, ok2, ok3, ok4))
-    print(f"\n结果: {'全部通过 ✔' if fails == 0 else f'{fails} 处失败 ✘'}")
-    return fails
-
-
-if __name__ == "__main__":
-    raise SystemExit(self_test())
 

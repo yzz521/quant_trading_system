@@ -22,13 +22,13 @@ import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.stock_analysis import (
-    StockDiagnoser,
     add_all_indicators,
     detect_market,
     fetch_kline,
 )
 from quant_trading_system.stock_analysis.ai import explain_plan
 from quant_trading_system.stock_analysis.backtest import TradingPlanBacktest
+from quant_trading_system.stock_analysis.data_fetcher import fetch_fund_flow, fetch_valuation
 from quant_trading_system.stock_analysis.market import (
     calc_market_breadth,
     fetch_market_context,
@@ -94,16 +94,39 @@ if run:
                 st.stop()
             df = add_all_indicators(raw)
 
-            diag = StockDiagnoser().diagnose(code)
-            # 从诊断的估值/资金流字段提取 Stock Score 需要的 extra 数据
-            val = diag.valuation or {}
-            ff = diag.fund_flow or {}
-            extra = {
-                "pe": val.get("pe_ttm") or val.get("pe"),
-                "total_cap_yi": val.get("market_cap") or val.get("total_cap_yi"),
-                "turnover": ff.get("turnover"),
-                "main_net": ff.get("main_net"),
-            }
+            # 从估值/资金流接口取 Stock Score 需要的 extra 数据（main-v3 无诊断模块）
+            val = fetch_valuation(info)
+            ff = fetch_fund_flow(info)
+            extra: dict = {}
+
+            if val is not None and not val.empty:
+                row = val.iloc[-1]
+                pe = None
+                for col in ("pe_ttm", "total_pe", "pe"):
+                    if col in row.index:
+                        pe = row[col]
+                        break
+                mv = None
+                for col in ("total_mv", "market_cap"):
+                    if col in row.index:
+                        mv = row[col]
+                        break
+                if pe is not None and not pd.isna(pe):
+                    extra["pe"] = float(pe)
+                if mv is not None and not pd.isna(mv):
+                    extra["total_cap_yi"] = float(mv) / 1e8  # akshare 单位为元
+
+            if ff is not None and not ff.empty:
+                # 主力净流入列（列名含「主力」且「净额」）
+                for col in ff.columns:
+                    if "主力" in col and "净额" in col:
+                        try:
+                            net = float(ff[col].astype(float).tail(5).sum())
+                            extra["main_net"] = net
+                            extra["turnover"] = float(ff.iloc[-1].get("换手率", 0)) if "换手率" in ff.columns else None
+                        except (TypeError, ValueError):
+                            pass
+                        break
             extra = {k: v for k, v in extra.items() if v is not None}
 
             engine = OpportunityEngine(

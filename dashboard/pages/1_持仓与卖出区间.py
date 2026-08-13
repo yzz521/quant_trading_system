@@ -21,14 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import pandas as pd
 import streamlit as st
-
+from quant_trading_system.dashboard.auth import require_login
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
 from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.sell_zone import analyze_positions
 from quant_trading_system.stock_analysis.trade_monitor import TradeMonitor
 
-from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
-from quant_trading_system.dashboard.auth import require_login
 apply_theme()
 require_login()
 page_header("持仓指挥台", "资金约束 · 本地账本 · 卖出区间与动作建议", "Holdings")

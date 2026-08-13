@@ -58,7 +58,7 @@ class TestPlansHtml:
 
 class TestBuildMarketMessage:
     def test_plans_block_present(self):
-        _, text, html = build_market_message("CN", [], trading_plans=[_plan()])
+        _, text, html = build_market_message("CN", trading_plans=[_plan()])
         assert "🎯 今日机会 · 交易计划" in html
         assert "🎯 今日机会 · 交易计划" in text
         assert "测试股(600000) BUY_ON_PULLBACK" in text
@@ -67,15 +67,35 @@ class TestBuildMarketMessage:
 
     def test_plans_optional(self):
         # 不传 trading_plans（旧调用方）不报错、无区块
-        _, _, html = build_market_message("CN", [])
+        _, _, html = build_market_message("CN")
         assert "今日机会" not in html
         # 显式 None 也不报错
-        _, _, html2 = build_market_message("CN", [], trading_plans=None)
+        _, _, html2 = build_market_message("CN", trading_plans=None)
         assert "今日机会" not in html2
 
     def test_avoid_plan_no_position_in_text(self):
         _, text, _ = build_market_message(
-            "CN", [], trading_plans=[{**_plan(), "decision": "AVOID", "position_percent": None}]
+            "CN", trading_plans=[{**_plan(), "decision": "AVOID", "position_percent": None}]
         )
         assert "AVOID" in text
         assert "仓位" not in text
+
+    def test_holdings_and_actions_blocks(self):
+        """持仓 + 卖出/加仓参考区块仍渲染（main-v3 核心）。"""
+        holdings = [
+            {"code": "600000", "name": "浦发", "quantity": 1000, "cost_price": 10.0,
+             "current_price": 11.0, "pnl": 1000.0, "pnl_pct": 10.0},
+        ]
+        summary = {"total_cost": 10000, "total_value": 11000, "total_pnl": 1000,
+                   "total_pnl_pct": 10.0, "count": 1}
+        actions = [{"code": "600000", "name": "浦发", "action": "持有", "note": "观望"}]
+        _, text, html = build_market_message(
+            "CN",
+            holdings=holdings, holdings_summary=summary,
+            holding_actions=actions,
+            trading_plans=[_plan()],
+        )
+        assert "💼 我的A股持仓" in html
+        assert "持仓卖出/加仓参考" in html
+        assert "今日机会 · 交易计划" in html
+        assert "浦发" in text

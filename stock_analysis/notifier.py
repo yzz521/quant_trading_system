@@ -143,16 +143,15 @@ class Notifier:
 # --------------------------------------------------------------------------- #
 # Message builders — return (title, text_body, html_body)
 # --------------------------------------------------------------------------- #
-def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list] = None,
-                         scan_enabled: bool = True,
-                         holdings: Optional[list] = None,
-                         holdings_summary: Optional[dict] = None,
-                         holding_actions: Optional[list] = None,
-                         capital_snapshot: Optional[dict] = None,
-                         ai_summary: Optional[str] = None,
-                         vibe_summary: Optional[str] = None,
-                         trading_plans: Optional[list] = None,
-                         ) -> tuple[str, str, str]:
+def build_market_message(
+    market: str,
+    holdings: Optional[list] = None,
+    holdings_summary: Optional[dict] = None,
+    capital_snapshot: Optional[dict] = None,
+    holding_actions: Optional[list] = None,
+    trading_plans: Optional[list] = None,
+) -> tuple[str, str, str]:
+    """构建每日决策邮件（main-v3 精简版：持仓 / 资金 / 今日机会 / 卖出加仓参考）。"""
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
     title = f"GP助手 · {mname} {now}"
@@ -180,7 +179,6 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
             )
             text_parts.append("")
 
-
     # --- capital summary ---
     if capital_snapshot:
         cs = capital_snapshot
@@ -201,17 +199,6 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
             f"满仓时「可买」常为空属正常。</p>",
         ))
 
-
-    # --- AI summary ---
-    if ai_summary:
-        text_parts.append("== GP助手 AI 点评 ==")
-        text_parts.append(ai_summary.strip())
-        text_parts.append("")
-        html_ai = "<pre style='white-space:pre-wrap;font-family:inherit;line-height:1.55;padding:8px;margin:0'>" + (
-            ai_summary.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ) + "</pre>"
-        html_parts.append(_html_section("🤖 GP助手 AI 点评", html_ai))
-
     # --- V2 trading plans (今日机会) ---
     if trading_plans:
         text_parts.append("== 🎯 今日机会 · 交易计划 ==")
@@ -230,94 +217,12 @@ def build_market_message(market: str, diagnoses: list, scan_hits: Optional[list]
         text_parts.append("")
         html_parts.append(_html_section("🎯 今日机会 · 交易计划", _plans_html(trading_plans)))
 
-    # --- Vibe secondary ---
-    if vibe_summary:
-        text_parts.append("== GP助手 · Vibe 二次分析 ==")
-        text_parts.append(vibe_summary.strip())
-        text_parts.append("")
-        html_v = "<pre style='white-space:pre-wrap;font-family:inherit;line-height:1.55;padding:8px;margin:0'>" + (
-            vibe_summary.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        ) + "</pre>"
-        html_parts.append(_html_section("🔎 Vibe 二次分析", html_v))
-
-
-
     # --- holding action (sell / add) ---
     if holding_actions:
         from .holdings_action import actions_to_html, actions_to_text
         text_parts.append(actions_to_text(holding_actions))
         text_parts.append("")
         html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
-
-    # --- diagnosis block ---
-    text_parts.append(f"== {mname}自选股诊断 ==")
-    html_parts.append(_html_section(f"📊 {mname}自选股诊断", _diagnoses_html(diagnoses)))
-    for d in diagnoses:
-        signals = "/".join(s["name"] for s in d.get("signals", [])) or "无信号"
-        adv = d.get("advice", {}) or {}
-        buy, stop, take = adv.get("buy_price"), adv.get("stop_loss"), adv.get("take_profit")
-        advice_str = (f" | 买{buy}/止损{stop}/止盈{take}" if buy
-                      else (f" | 离场位{stop}" if stop else ""))
-        tag = d.get("buy_label") or ""
-        text_parts.append(
-            f"{d['code']} {d['name']} | 评分{d['score']} {d['rating']} | "
-            f"{d['trend']} | {d['price']} ({_fmt_pct(d['change_pct'])}) | {signals}{advice_str}"
-            + (f" | {tag}" if tag else "")
-        )
-
-    # --- scan block (with optional buy-power split) ---
-    if scan_enabled and scan_hits:
-        text_parts.append("")
-        has_tags = any(h.get("buy_tag") for h in scan_hits)
-        if has_tags:
-            from .buy_power import partition_annotated
-            parts = partition_annotated(scan_hits, max_ok=10)
-            def _scan_line(h):
-                tag = h.get("buy_label") or ""
-                matched = ", ".join(h.get("matched") or [])
-                return (
-                    f"{h.get('code')} {h.get('name')} | {h.get('close')} "
-                    f"({_fmt_pct(h.get('change_pct'))}) | 评分{h.get('score')} | {matched}"
-                    + (f" | {tag}" if tag else "")
-                )
-            text_parts.append(f"== 新开仓·可买（最多10只，共扫描 {len(scan_hits)}） ==")
-            if parts["ok"]:
-                for h in parts["ok"]:
-                    text_parts.append(_scan_line(h))
-            else:
-                text_parts.append("（当前可用资金下无「可买」标的，满仓时属正常）")
-            rest = parts["no_cash"] + parts["capped"] + parts["held"] + parts["other"] + parts["ok_extra"]
-            if rest:
-                text_parts.append("")
-                text_parts.append(f"== 新开仓·资金不足/已持有/其他（{len(rest)} 只） ==")
-                for h in rest[:40]:
-                    text_parts.append(_scan_line(h))
-            html_parts.append(_html_section(
-                "🔍 扫描命中（含可买性）",
-                _scan_html_annotated(scan_hits),
-            ))
-        else:
-            text_parts.append(f"== 扫描命中 {len(scan_hits)} 只 ==")
-            html_parts.append(_html_section(f"🔍 扫描命中 {len(scan_hits)} 只", _scan_html(scan_hits)))
-            for h in scan_hits[:30]:
-                text_parts.append(
-                    f"{h['code']} {h['name']} | {h['close']} ({_fmt_pct(h['change_pct'])}) | "
-                    f"评分{h['score']} | {', '.join(h['matched'])}"
-                )
-
-    # --- risk block ---
-    risks = []
-    for d in diagnoses:
-        stock = f"{d['name']}({d['code']})"
-        for r in d.get("risks", []):
-            if "暂未触发" not in r:
-                risks.append({"stock": stock, "risk": r})
-    if risks:
-        text_parts.append("")
-        text_parts.append("== 风险提示 ==")
-        html_parts.append(_html_section("⚠️ 风险提示", _risks_html(risks)))
-        for rk in risks[:12]:
-            text_parts.append(f"⚠️ {rk['stock']}: {rk['risk']}")
 
     text_body = "\n".join(text_parts)
     html_body = _html_wrap(title, mname, html_parts)
@@ -384,88 +289,6 @@ def _holdings_html(holdings: list, summary: Optional[dict]) -> str:
         "<th>现价</th><th>盈亏</th><th>盈亏%</th></tr></thead>"
         f"<tbody>{rows}{srow}</tbody></table>"
     )
-
-
-def _diagnoses_html(diagnoses: list) -> str:
-    if not diagnoses:
-        return "<p class='neutral' style='padding:8px'>暂无数据</p>"
-    rows = ""
-    for d in diagnoses:
-        rcolor = RATING_COLOR.get(d["rating"], NEUTRAL)
-        ccls = "up" if d["change_pct"] >= 0 else "down"
-        signals = "、".join(s["name"] for s in d.get("signals", [])) or "无"
-        adv = d.get("advice", {}) or {}
-        buy, stop, take = adv.get("buy_price"), adv.get("stop_loss"), adv.get("take_profit")
-        if buy:
-            advice_cell = (f"<td style='font-size:11px;line-height:1.5'>"
-                           f"买 <span class='up'>{buy}</span><br>"
-                           f"损 <span class='down'>{stop}</span><br>"
-                           f"盈 <span class='up'>{take}</span></td>")
-        elif stop:
-            advice_cell = f"<td style='font-size:11px'><span class='down'>离场 {stop}</span></td>"
-        else:
-            advice_cell = "<td class='neutral'>—</td>"
-        rows += (
-            f"<tr><td>{d['code']}</td><td>{d['name']}</td>"
-            f"<td><span class='tag' style='background:{rcolor}'>{d['score']}</span></td>"
-            f"<td style='color:{rcolor}'>{d['rating']}</td><td>{d['trend']}</td>"
-            f"<td>{d['price']}</td><td class='{ccls}'>{_fmt_pct(d['change_pct'])}</td>"
-            f"<td style='font-size:12px;color:#6b7280'>{signals}</td>{advice_cell}</tr>"
-        )
-    return (
-        "<table><thead><tr><th>代码</th><th>名称</th><th>评分</th><th>评级</th>"
-        "<th>趋势</th><th>现价</th><th>涨跌</th><th>信号</th><th>建议价位</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-    )
-
-
-def _scan_html(hits: list) -> str:
-    rows = ""
-    for h in hits[:30]:
-        ccls = "up" if h["change_pct"] >= 0 else "down"
-        matched = "、".join(h["matched"])
-        rows += (
-            f"<tr><td>{h['code']}</td><td>{h['name']}</td><td>{h['close']}</td>"
-            f"<td class='{ccls}'>{_fmt_pct(h['change_pct'])}</td>"
-            f"<td><span class='tag' style='background:#1f77b4'>{h['score']}</span></td>"
-            f"<td style='font-size:12px'>{matched}</td></tr>"
-        )
-    extra = f"<p class='neutral' style='font-size:12px;padding:6px'>共{len(hits)}只，已显示前30</p>" if len(hits) > 30 else ""
-    return (
-        "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
-        "<th>评分</th><th>匹配条件</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>{extra}"
-    )
-
-
-def _risks_html(risks: list) -> str:
-    items = "".join(
-        f"<li style='color:{DOWN};margin:4px 0'>⚠️ <b>{r['stock']}</b>: {r['risk']}</li>"
-        for r in risks[:12]
-    )
-    return f"<ul style='padding-left:20px;margin:6px 0'>{items}</ul>"
-
-
-def _scan_html_annotated(hits: list) -> str:
-    if not hits:
-        return "<p class='neutral'>暂无</p>"
-    rows = ""
-    for h in hits[:50]:
-        tag = h.get("buy_label") or ""
-        matched = "、".join(h.get("matched") or [])
-        rows += (
-            f"<tr><td>{h.get('code')}</td><td>{h.get('name')}</td>"
-            f"<td>{h.get('close')}</td><td>{_fmt_pct(h.get('change_pct'))}</td>"
-            f"<td>{h.get('score')}</td><td>{matched}</td>"
-            f"<td>{tag}</td></tr>"
-        )
-    return (
-        "<table><thead><tr><th>代码</th><th>名称</th><th>现价</th><th>涨跌</th>"
-        "<th>评分</th><th>命中</th><th>可买性</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-    )
-
-
 def _plans_html(plans: list) -> str:
     """V2 交易计划 HTML 表格（今日机会区块）。
 

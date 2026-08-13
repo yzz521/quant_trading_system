@@ -1,4 +1,0 @@
-# 复制为 config/vibe.yaml（可选；页面上也可临时填写）
-base_url: "http://127.0.0.1:8899"
-auth_key: ""          # 非本机访问时与 Vibe API_AUTH_KEY 一致
-timeout_sec: 180

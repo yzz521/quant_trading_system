@@ -1,33 +1,12 @@
-"""Quantitative Trading System
+"""Quantitative Trading System · main-v3
 
-A modular, event-driven quantitative trading framework supporting multi-market
-(A-shares / US / HK / futures / crypto) backtesting, paper trading and live
-execution through a unified event bus.
+精简版：只保留三块核心功能
+  * 今日计划（V2 机会引擎：评分/入场/止损/目标/RR/仓位 + 回测 + AI 解读 + 市场状态）
+  * 我的 A 股持仓
+  * 持仓卖出/加仓参考
 
-Quick start::
-
-    from quant_trading_system import BacktestEngine, BacktestConfig
-    from quant_trading_system.data import SyntheticDataSource, BarFeed
-    from quant_trading_system.strategy import MovingAverageCrossStrategy
-
-    ds = SyntheticDataSource()
-    df = ds.get_history("DEMO", "2022-01-01", "2024-12-31")
-    feed = BarFeed({"DEMO": df})
-    engine = BacktestEngine(BacktestConfig(initial_capital=1_000_000))
-    engine.add_strategy(MovingAverageCrossStrategy(["DEMO"], fast=5, slow=20))
-    portfolio = engine.run(feed)
-    print(portfolio.equity)
+V1 事件驱动量化框架（backtest/strategy/portfolio/execution 等）已移除，
+见 main 分支保留历史版本。
 """
-from .core import EventEngine
-from .backtest import BacktestEngine, BacktestConfig
-from .analytics import PerformanceReport, compute_metrics
-
-__version__ = "0.1.0"
-__all__ = [
-    "EventEngine",
-    "BacktestEngine",
-    "BacktestConfig",
-    "PerformanceReport",
-    "compute_metrics",
-    "__version__",
-]
+__version__ = "0.3.0"
+__all__ = ["__version__"]

@@ -1,41 +1,29 @@
-"""Stock analysis toolkit — diagnose real stocks across A-share / US / HK.
+"""Stock analysis toolkit (main-v3 精简版) — 三块核心功能。
 
 Public API::
 
-    from quant_trading_system.stock_analysis import StockDiagnoser, StockScanner
-    result = StockDiagnoser().diagnose("600000")   # A-share
-    result = StockDiagnoser().diagnose("AAPL")     # US
-    result = StockDiagnoser().diagnose("00700")    # HK
-    print(result.summary, result.score, result.rating)
+    from quant_trading_system.stock_analysis import (
+        MarketInfo, detect_market, fetch_kline, fetch_name, add_all_indicators,
+        Notifier, build_market_message, MarketScheduler, Holdings,
+    )
 
-    hits = StockScanner().scan(["600000","000001"], ["多头排列","放量"])
+功能范围：今日计划（机会引擎/回测/AI/市场状态）、我的持仓、持仓卖出/加仓参考、
+每日邮件推送（今日机会 + 持仓 + 卖出参考）。
 """
-from .data_fetcher import detect_market, fetch_kline, fetch_name, MarketInfo
+from .data_fetcher import MarketInfo, detect_market, fetch_kline, fetch_name
+from .holdings import Holdings
 from .indicators import add_all_indicators
-from .patterns import scan_signals
-from .diagnosis import StockDiagnoser, DiagnosisResult
-from .scanner import StockScanner, ScanHit, PRESETS
 from .notifier import Notifier, build_market_message
 from .scheduler import MarketScheduler
-from .holdings import Holdings
-from .report import StockReport
 
 __all__ = [
-    "StockDiagnoser",
-    "DiagnosisResult",
-    "StockScanner",
-    "ScanHit",
-    "PRESETS",
-    "Notifier",
-    "MarketScheduler",
-    "build_market_message",
-    "StockReport",
+    "MarketInfo",
     "detect_market",
     "fetch_kline",
     "fetch_name",
-    "MarketInfo",
     "add_all_indicators",
-    "scan_signals",
+    "Notifier",
+    "build_market_message",
+    "MarketScheduler",
+    "Holdings",
 ]
-from .holdings_bridge import apply_holdings_to_portfolio, portfolio_to_holdings_rows, snapshot_compare  # noqa: F401
-from .universe import make_universe, symbols_from_scan_hits, symbols_from_holdings  # noqa: F401

@@ -113,7 +113,6 @@ def analyze_sell_zone(position: dict, days: int = 250,
         # ---- 建议卖出区间：现价上方最近的 1~2 个目标位 ----
         # 深度亏损（<= -20%）：优先「反弹减仓 → 回本」，技术位仅作途中参考
         deep_loss = pnl_pct <= -20.0
-        mild_loss = -20.0 < pnl_pct < 0
         stage1 = None  # (lo, hi, lo_label, hi_label) 近端分批
         stage2 = None  # 最终回本
 

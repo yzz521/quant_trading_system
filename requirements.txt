@@ -1,4 +1,4 @@
-# Quantitative Trading System — Python dependencies
+# GP助手 · 每日决策（main-v3）— Python dependencies
 # 以可编辑方式安装本项目，使 `import quant_trading_system` 在任意部署环境（如云端）可用
 -e .
 
@@ -11,17 +11,8 @@ pyyaml>=6.0
 requests>=2.28         # notifier / 推送通道（email、Server酱、飞书）
 
 # Data sources (install what you need)
-akshare>=1.10          # A股 / 港股 / 期货
-yfinance>=0.2.30       # 美股 / 黄金 / ETF
+akshare>=1.10          # A股 / 港股 行情
+yfinance>=0.2.30       # 美股 行情
 
-# Machine learning (optional — only for MLStrategy / ml module)
-scikit-learn>=1.3
-
-# Dashboard (optional)
+# Dashboard
 streamlit>=1.28
-weasyprint>=60.0         # 周报 PDF 渲染（需系统 pango，macOS: brew install pango）
-
-# Live brokers (install only when going live)
-# python-binance       # 加密货币实盘
-# vnpy_ctp             # 期货 CTP 实盘
-# ib_insync            # 美股 IBKR 实盘
