@@ -86,6 +86,40 @@ class TestBatchScan:
         assert codes[0]["name"] == "浦发"  # name_map 优先
         assert codes[1]["name"] == "平安"
 
+    def test_fill_names_uses_code_table(self, monkeypatch):
+        """A 股纯代码候选自动补全名称（模拟 akshare 代码表）。"""
+        import pandas as pd
+
+        fake_table = pd.DataFrame(
+            [{"code": "600000", "name": "浦发银行"}, {"code": "601318", "name": "中国平安"}]
+        )
+        monkeypatch.setattr("akshare.stock_info_a_code_name", lambda: fake_table)
+        # 清掉类缓存，确保走一次拉取
+        OpportunityBatchScanner._NAME_TABLE = None
+        OpportunityBatchScanner._NAME_TABLE_TS = 0.0
+
+        scanner = _scanner(_FakeEngine({}))
+        codes = scanner._normalize(["600000", "601318", "AAPL"], name_map=None)
+        by_code = {c["code"]: c["name"] for c in codes}
+        assert by_code["600000"] == "浦发银行"
+        assert by_code["601318"] == "中国平安"
+        # 非 A 股（美股）名称保持 code 兜底
+        assert by_code["AAPL"] == "AAPL"
+
+    def test_fill_names_failure_falls_back(self, monkeypatch):
+        """代码表获取失败时不抛异常，名称回退为 code。"""
+        def boom(*a, **kw):
+            raise RuntimeError("网络失败")
+
+        monkeypatch.setattr("akshare.stock_info_a_code_name", boom)
+        OpportunityBatchScanner._NAME_TABLE = None
+        OpportunityBatchScanner._NAME_TABLE_TS = 0.0
+
+        scanner = _scanner(_FakeEngine({}))
+        codes = scanner._normalize(["600000"], name_map=None)
+        assert codes[0]["code"] == "600000"
+        assert codes[0]["name"] == "600000"  # 兜底
+
     def test_scan_filters_avoid_and_sorts(self):
         engine = _FakeEngine({
             "A": DecisionState.BUY_NOW,   # 机会分 90

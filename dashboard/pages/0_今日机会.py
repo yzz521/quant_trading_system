@@ -117,7 +117,7 @@ def _scan_pool(pool_key: str, account_eq: float, regime_score: float | None, mar
     return scanner.scan(codes, market="CN")
 
 
-with st.spinner(f"正在扫描 {len(pool)} 只候选 ..."):
+with st.spinner(f"⏳ 正在扫描 {len(pool)} 只候选股票，请稍候（约 3-10 秒）..."):
     res = _scan_pool(
         pool_key=",".join(pool),
         account_eq=account,
@@ -125,7 +125,7 @@ with st.spinner(f"正在扫描 {len(pool)} 只候选 ..."):
         market_factor=regime.factor if regime else 1.0,
     )
 
-st.caption(f"股票池 {len(pool)} 只，耗时 {res.elapsed:.1f}s · {len(res.plans)} 只有效计划")
+st.success(f"✔ 扫描完成：股票池 {len(pool)} 只 → {len(res.plans)} 个有效计划（耗时 {res.elapsed:.1f}s）")
 
 if not res.plans:
     st.warning("当前股票池无有效机会（可能全部 AVOID 或数据不足），可下方『自定义扫描』输入其他代码")
@@ -225,11 +225,13 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
     return {"plan_res": plan_res, "df": df, "bt_res": bt_res}
 
 
-detail = _analyze_one(
-    sel_code, sel_name, account,
-    regime.score if regime else None,
-    regime.factor if regime else 1.0,
-) if res.plans else None
+# ---- 单只详情（缓存命中时秒开；首次或过期时显示加载进度） ----
+with st.spinner(f"⏳ 正在深度分析 {sel_code}（K线/估值/资金流/回测）..."):
+    detail = _analyze_one(
+        sel_code, sel_name, account,
+        regime.score if regime else None,
+        regime.factor if regime else 1.0,
+    ) if res.plans else None
 
 if detail is None:
     if not res.plans:
@@ -318,7 +320,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
         if not codes:
             st.warning("请输入至少一个股票代码")
         else:
-            with st.spinner(f"批量分析 {len(codes)} 只 ..."):
+            with st.spinner(f"⏳ 正在批量分析 {len(codes)} 只，请稍候..."):
                 eng = OpportunityEngine(
                     account_equity=custom_account,
                     regime_score=regime.score if regime else None,
@@ -327,7 +329,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
                 scanner = OpportunityBatchScanner(engine=eng, workers=5)
                 custom_res = scanner.scan(codes, market="CN")
             if custom_res.plans:
-                st.success(f"生成 {len(custom_res.plans)} 个有效计划（AVOID 已过滤）")
+                st.success(f"✔ 扫描完成：{len(custom_res.plans)} 个有效计划（AVOID 已过滤，耗时 {custom_res.elapsed:.1f}s）")
                 rows = []
                 for p in custom_res.plans:
                     rows.append({

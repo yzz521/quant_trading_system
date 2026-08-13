@@ -174,7 +174,45 @@ class OpportunityBatchScanner:
             if c["code"] not in seen:
                 seen.add(c["code"])
                 dedup.append(c)
-        return dedup
+        return self._fill_names(dedup)
+
+    # ------------------------------------------------------------------ #
+    _NAME_TABLE: Optional[dict] = None   # code → 名称（A 股全量表，24h 缓存）
+    _NAME_TABLE_TS: float = 0.0
+
+    def _fill_names(self, codes: list[dict]) -> list[dict]:
+        """A 股代码缺名称时用全量代码表补齐（一次拉取，24h 缓存）。
+
+        批量扫描候选多为纯代码（str），不补名称则邮件/看板只显示代码。
+        失败/非 A 股保持原样（用 code 兜底），不抛异常。
+        """
+        missing = [c for c in codes if not c.get("name") or c["name"] == c["code"]]
+        cn_missing = [c for c in missing
+                      if c["code"].isdigit() and len(c["code"]) == 6]
+        if not cn_missing:
+            return codes
+
+        import time as _t
+
+        if OpportunityBatchScanner._NAME_TABLE is None or \
+                _t.time() - OpportunityBatchScanner._NAME_TABLE_TS > 24 * 3600:
+            table: dict = {}
+            try:
+                import akshare as ak
+                df = ak.stock_info_a_code_name()
+                for _, r in df.iterrows():
+                    table[str(r["code"])] = str(r["name"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("A 股代码表获取失败（名称保持 code 兜底）: %s", e)
+            OpportunityBatchScanner._NAME_TABLE = table
+            OpportunityBatchScanner._NAME_TABLE_TS = _t.time()
+
+        table = OpportunityBatchScanner._NAME_TABLE or {}
+        for c in cn_missing:
+            n = table.get(c["code"])
+            if n:
+                c["name"] = n
+        return codes
 
     def _analyze_one(self, cand: dict, name_map: Optional[dict]) -> BatchScanItem:
         code, name = cand["code"], cand["name"]
