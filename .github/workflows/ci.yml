@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, "feat-*"]
+    branches: [main, main-v2, main-v3, master, "feat-*"]
   pull_request:
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
           python -m pip install -U pip
           pip install -e ".[dev,dashboard]"
       - name: Lint
-        run: ruff check core strategy backtest risk portfolio analytics data utils stock_analysis || true
+        run: ruff check stock_analysis dashboard utils examples || true
       - name: Test
         run: |
           # Package folder is repo root; ensure parent is importable as quant_trading_system

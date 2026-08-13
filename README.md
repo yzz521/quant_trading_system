@@ -1,22 +1,25 @@
-# quant_trading_system
+# quant_trading_system · GP助手
 
-事件驱动的多市场量化交易框架，并附带 **A 股个人持仓助手**（卖出区间、诊断、定时推送）与 **V2 交易决策助手**（每日机会、交易计划、回测验证、AI 解读）。
+**main-v3 精简版** —— 每日投资决策助手，只保留三块核心功能：
+**今日计划**（评分/入场/止损/目标/风险收益比/仓位 + 回测验证 + AI 解读）、**我的持仓**、**持仓卖出/加仓参考**，支持每日邮件推送与本地看板。
 
-- **License**: MIT  
-- **Python**: ≥ 3.10  
-- **仓库**: https://github.com/yzz521/quant_trading_system  
+- **License**: MIT
+- **Python**: ≥ 3.10
+- **仓库**: https://github.com/yzz521/quant_trading_system（默认分支 `main-v3`）
+- 历史版本：`main-v2`（V2 完整版，含诊断/扫描/漏斗/Vibe）、`main`（V1 事件驱动量化框架）
 
 ---
 
-## 产品双轨
+## 功能一览
 
-| 轨道 | 做什么 | 怎么进 |
-|------|--------|--------|
-| **A. 量化框架** | 数据 → 策略 → 风控 → 回测 / Paper | `examples/backtest_demo.py`、`BacktestEngine` |
-| **B. A 股助手** | 持仓 SQLite、卖出区间、诊断扫描、邮件推送 | `python deploy/ctl.py start-all` → http://localhost:8502 |
-| **C. V2 交易决策助手** | 每日机会：评分 → 机会引擎 → 交易计划 → 历史回测 → AI 解读 | 看板「今日机会」页、`examples/run_opportunity.py` |
+| 功能 | 说明 | 入口 |
+|------|------|------|
+| 🎯 **今日计划** | 个股双评分（Stock / Opportunity）→ 机会引擎 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态（BULL/NEUTRAL/BEAR/HIGH_RISK）调节仓位 | 看板「今日机会」页、`examples/run_opportunity.py` |
+| 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步 | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
+| 🎯 **卖出/加仓参考** | 卖出一二档、止损、深套分批路径、加仓参考 | 看板持仓页、每日邮件区块 |
+| 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | `examples/run_scheduler.py` |
 
-助手用于研究与决策辅助，**不会自动下真实订单**。CTP / IBKR / Binance 等实盘适配器默认仍是骨架（`NotImplementedError`），需自行接 SDK，见 [`docs/LIVE_BROKERS.md`](docs/LIVE_BROKERS.md)。
+决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）。量化负责计算、AI 负责解释、回测负责验证、**你做最终决策**。
 
 ---
 
@@ -27,6 +30,7 @@
 ```bash
 git clone https://github.com/yzz521/quant_trading_system.git
 cd quant_trading_system
+git checkout main-v3
 
 python3 -m venv .venv
 # macOS / Linux
@@ -34,206 +38,59 @@ source .venv/bin/activate
 # Windows PowerShell
 # .\.venv\Scripts\Activate.ps1
 
-pip install -U pip
-pip install -e ".[dev,data,dashboard]"
+pip install -e ".[dev]"
+pip install akshare streamlit
 # 或: pip install -r requirements.txt && pip install streamlit akshare
 ```
 
-包目录名需为 `quant_trading_system`，以便 `import quant_trading_system`。
-
-### 2. 一键启动（推荐）
-
-跨平台统一入口是 **`deploy/ctl.py`**（不依赖 bash）：
+### 2. 一键启动（macOS，推荐）
 
 ```bash
-# 任意系统（在项目根目录）
-python deploy/ctl.py start-all
+./deploy/restart.sh            # 重启 launchd 调度器 + Streamlit 看板
+./deploy/restart.sh dashboard  # 只重启看板
+./deploy/restart.sh scheduler  # 只重启调度器
+./deploy/restart.sh status     # 查看运行状态与最近日志
 ```
 
-| 系统 | 命令 |
-|------|------|
-| **任意平台** | `python deploy/ctl.py start-all` |
-| Windows CMD | `deploy\ctl.bat start-all` |
-| Windows PowerShell | `.\deploy\ctl.ps1 start-all` |
-| macOS / Linux | `./deploy/ctl.sh start-all`（内部转调 ctl.py） |
-
-浏览器只打开 **一个地址**：
-
-| 地址 | 说明 |
-|------|------|
-| **http://localhost:8502** | 左侧菜单：持仓与卖出区间 / 个股诊断与扫描 / 研究工具（回测与风险） |
-
-```bash
-python deploy/ctl.py status
-python deploy/ctl.py stop-all
-python deploy/ctl.py restart-all
-
-# 看板 + 定时推送（需先配置 config/notify.yaml）
-python deploy/ctl.py start-all --with-scheduler
-```
-
-单独控制：
-
-```bash
-python deploy/ctl.py dashboard start|stop|status|log
-python deploy/ctl.py scheduler start|stop|status|log
-```
-
-端口用环境变量 `PORT` 覆盖（默认 **8502**）。
+- 看板：http://localhost:8502（「今日机会」+「持仓与卖出区间」两页）
+- 调度器：launchd `com.gp.stock-scheduler`，交易日开盘时段定时推送邮件
+- 其他平台：`python deploy/ctl.py dashboard start` / `python deploy/ctl.py scheduler start`
 
 ### 3. 运行测试与示例
 
 ```bash
-# 若未 editable 安装，需能 import 到包
-export PYTHONPATH="$(dirname "$PWD"):$PYTHONPATH"   # Linux/macOS
-# Windows CMD: set PYTHONPATH=%CD%\..
+pytest -q                          # 96 项测试
+ruff check stock_analysis dashboard utils examples
 
-pytest -q
-
-python examples/backtest_demo.py
-python examples/paper_loop_demo.py
-python examples/universe_backtest_demo.py
-```
-
----
-
-## 架构概览
-
-```
-DataFeed / DataSource
-    → MarketEvent → Strategy → SignalEvent
-    → ExecutionHandler + RiskManager → OrderEvent
-    → Broker (Simulated / Paper) → FillEvent → Portfolio
-```
-
-- 回测默认 **下一根 open 成交**（`fill_policy=next_open`），避免偷看当根收盘价。  
-- A 股约束可配：T+1、涨跌停、成交量上限、`lot_size=100`、卖出印花税。  
-- Paper / Live：`EventEngine(thread_safe=True)`，支持定时拉行情（`LiveBarPoller`）。
-
-更细说明见 [`docs/architecture.md`](docs/architecture.md)。
-
----
-
-## 目录结构
-
-```text
-quant_trading_system/
-├── core/              # 事件、EventEngine
-├── data/              # AkShare / yfinance / 合成 / Fallback / BarFeed
-├── strategy/          # 策略 + create_strategy 注册表
-├── risk/              # 仓位 / 回撤 / T+1 / 投影权重 / 下单频率
-├── portfolio/         # 现金、持仓、权益曲线
-├── backtest/          # SimulatedBroker、Optimizer（网格 / Walk-Forward）
-├── execution/         # PaperBroker、LiveEngine、LiveBarPoller、券商骨架
-├── analytics/         # 绩效指标、基准对比、HTML 报告
-├── stock_analysis/    # 持仓 DB、卖出区间、诊断、扫描、调度推送
-│   ├── scoring/       # V2: Stock Score + Opportunity Score
-│   ├── opportunity/   # V2: 支撑阻力/入场/止损/目标/RR/仓位/TradingPlan/机会引擎
-│   ├── market/        # V2: 市场状态(BULL/NEUTRAL/BEAR/HIGH_RISK)/宽度/风险
-│   ├── backtest/      # V2: Trading Plan 历史回测（防 look-ahead）
-│   └── ai/            # V2: AI 分析师（量化结果 → 自然语言，只解释不定价）
-├── dashboard/         # Streamlit 多页：首页 + 持仓 / 诊断 / 研究工具 / V2 今日机会
-├── deploy/            # ctl.py / ctl.sh / ctl.ps1 / ctl.bat
-├── examples/
-├── config/            # settings、*.yaml.example（勿提交真实密钥）
-├── tests/
-└── docs/
-```
-
----
-
-## 常用能力速查
-
-### 回测
-
-```python
-from quant_trading_system.backtest import BacktestConfig, BacktestEngine
-from quant_trading_system.data import BarFeed, SyntheticDataSource
-from quant_trading_system.strategy import create_strategy
-
-cfg = BacktestConfig(t1_enabled=True, enforce_limit=True, lot_size=100)
-feed = BarFeed({"600000": df}, calendar_market="CN")
-eng = BacktestEngine(cfg)
-eng.add_strategy(create_strategy("ma_cross", symbols=["600000"], fast=5, slow=20))
-portfolio = eng.run(feed)
-```
-
-### 参数网格 / Walk-Forward
-
-```python
-from quant_trading_system.backtest import grid_search, walk_forward, walk_forward_summary
-```
-
-### 基准对比
-
-```python
-from quant_trading_system.analytics import compute_benchmark_metrics
-m = compute_benchmark_metrics(portfolio, hs300_close_series)
-# information_ratio, excess_total_return, beta, ...
-```
-
-### 数据多源降级
-
-```python
-from quant_trading_system.data import FallbackDataSource, AkShareSource, LocalParquetSource
-src = FallbackDataSource([AkShareSource(), LocalParquetSource("data_cache")])
-```
-
-### 持仓 → 风险诊断 / 回测股票池
-
-```python
-from quant_trading_system.stock_analysis.risk_diagnosis import diagnose_holdings
-from quant_trading_system.stock_analysis.universe import make_universe
-```
-
-### 卖出区间（含深套分批路径）
-
-浏览器 **http://localhost:8502** → 左侧 **「持仓与卖出区间」**；或：
-
-```python
-from quant_trading_system.stock_analysis.sell_zone import analyze_sell_zone
-analyze_sell_zone({"code": "002269", "cost_price": 3.595})
-```
-
-### Paper 闭环
-
-```bash
-python examples/paper_loop_demo.py
-python examples/paper_poll_demo.py --seconds 5
-```
-
-### V2 交易决策（每日机会）
-
-```bash
-# 单票完整交易计划（联网，默认 600000）
+# 单票交易计划（联网，默认 600000）
 python examples/run_opportunity.py 600000 --account 100000
-
 # 离线演示（合成数据）
-python examples/run_opportunity.py --synthetic --account 100000
+python examples/run_opportunity.py --synthetic
+
+# 批量机会扫描（候选池 → 按机会分排序的计划列表）
+python examples/run_batch_opportunity.py 600000 000001 600519
 
 # 历史规则回测（验证入场/止损/目标是否有效，防 look-ahead）
 python examples/run_backtest_plan.py 600000 --days 750
-python examples/run_backtest_plan.py --synthetic
-```
 
-- 双评分：`Stock Score`（个股质量，6 维加权）+ `Opportunity Score`（当前是否可交易，7 维加权）
-- 交易计划：入场区间（理想/标准/激进）、止损（结构/ATR/支撑/固定风险取最严）、三档目标价、风险收益比、建议仓位（账户风险 × 止损距离，单票 ≤20%）
-- 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）
-- AI 解读：TradingPlan → 自然语言（为何关注/能否买/入场逻辑/风险/失效条件），**AI 只解释不定价**
-- 看板入口：`dashboard/pages/0_今日机会.py`（市场状态 + 交易计划 + AI + 回测）
-- 计划书：`docs/quant_trading_system_v2_dev_plan_en.md`（中英双语），V2 开发在 `main-v2` 分支
+# 持仓
+python examples/my_holdings.py
+# 邮件模板预览（写 results/email_*_preview.html）
+python examples/gen_email_preview.py
+```
 
 ---
 
-## 定时推送（调度器）
-
-看板与调度器共用 **`config/holdings.db`**（由 `Holdings` 从 `config/holdings.yaml` 路径解析，与路径 A 一致）。
+## 每日邮件（定时推送）
 
 1. 复制并编辑推送配置（**不要**提交真实密钥）：
 
 ```bash
 cp config/notify.yaml.example config/notify.yaml
 # 打开 notify.email.enabled，填写 SMTP 授权码与收件人
+# opportunity.enabled=true 后，邮件将包含「今日机会 · 交易计划」区块
+#   index_symbol: 市场状态参考指数（sh000001 上证 / sh000300 沪深300）
+#   max_stocks / account_equity / workers / min_opportunity_score
 ```
 
 2. 测试一发（可指定市场，不依赖是否开盘）：
@@ -245,56 +102,40 @@ python examples/run_scheduler.py --test --market CN
 3. 常驻：
 
 ```bash
-python deploy/ctl.py scheduler start
+./deploy/restart.sh scheduler
 # 或
-python deploy/ctl.py start-all --with-scheduler
+python deploy/ctl.py scheduler start
 ```
 
-推送内容包括：持仓盈亏、自选诊断、可选扫描命中；若已合入持仓动作模块，还会包含 **卖出区间 / 止损 / 深套分批 / 加仓参考**（研究辅助，非投资建议）。
-
-日志：`results/scheduler.log`。说明见 [`docs/SCHEDULER_HOLDINGS.md`](docs/SCHEDULER_HOLDINGS.md)。
+推送内容四区块：**💼 我的持仓 → 💰 资金账户 → 🎯 今日机会 · 交易计划 → 🎯 持仓卖出/加仓参考**。日志：`results/scheduler.log`。
 
 ---
 
-## 与 Vibe-Trading 二次分析联动
+## 目录结构
 
-本系统可以把 **持仓 + 扫描命中候选股** 投喂给本地 [Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)
-（HKU 开源的个人交易 Agent）做二次分析，结果回填到邮件与看板。
-
-```bash
-# 终端1：启动 Vibe（首次需 pip install vibe-trading-ai 并 vibe-trading init）
-vibe-trading serve --port 8899
-
-# 终端2：看板「Vibe 二次分析」页手动发起；或配置后随邮件自动执行
-python deploy/ctl.py start-all
+```text
+quant_trading_system/
+├── stock_analysis/          # 核心逻辑
+│   ├── opportunity/         # 支撑阻力/入场/止损/目标/RR/仓位/TradingPlan/机会引擎/批量扫描
+│   ├── scoring/             # Stock Score（个股质量）+ Opportunity Score（可交易性）
+│   ├── market/              # 市场状态（真实指数）/ 宽度 / 风险
+│   ├── backtest/            # Trading Plan 历史回测（严格防 look-ahead）
+│   ├── ai/                  # AI 分析师（量化结果 → 自然语言，只解释不定价）
+│   ├── holdings.py          # 我的持仓（SQLite）
+│   ├── sell_zone.py         # 卖出区间（含深套分批路径）
+│   ├── holdings_action.py   # 卖出/加仓参考
+│   ├── trade_monitor.py     # 粘贴成交解析 + 同步持仓（parser + apply_trade）
+│   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级）
+│   ├── indicators.py        # 技术指标（MA/MACD/RSI/KDJ/BOLL/ATR 等）
+│   ├── notifier.py          # 邮件/Server酱/飞书推送
+│   └── scheduler.py         # 交易时段调度器
+├── dashboard/               # Streamlit：首页 + 今日机会 + 持仓与卖出区间
+├── deploy/                  # restart.sh / ctl.py（跨平台管理）
+├── examples/                # 7 个冒烟脚本
+├── config/                  # notify.yaml.example、holdings.yaml（勿提交真实密钥）
+├── tests/                   # 96 项测试
+└── docs/
 ```
-
-- 载荷内容：`holdings`（持仓）+ `candidates`（扫描命中 Top 15，调度器每小时落盘
-  `results/latest_scan.json`，页面/CLI/邮件统一读取）。
-- 配置：`config/notify.yaml` 的 `vibe:` 段（`enabled` / `on_email` / `candidate_count`）。
-- 详细说明见 [docs/VIBE_BRIDGE.md](docs/VIBE_BRIDGE.md)、[docs/VIBE_ON_EMAIL.md](docs/VIBE_ON_EMAIL.md)。
-
----
-
-## 一键发布便携包（Release）
-
-打一个 `v*` tag 即可由 GitHub Actions 自动构建 4 个平台的便携包并挂到
-Release（内含独立 Python 运行时 + 全部依赖 + 一键启动脚本，解压即用）：
-
-| 包 | 适用平台 | runner |
-|----|---------|--------|
-| `quant_trading_system-portable-windows-x64.zip` | Windows 10/11 x64 | `windows-latest` |
-| `quant_trading_system-portable-macos-arm64.zip` | macOS Apple Silicon（M 系列） | `macos-latest` |
-| `quant_trading_system-portable-macos-x64.zip` | macOS Intel | `macos-26-intel` |
-| `quant_trading_system-portable-linux-x64.zip` | Linux x64 | `ubuntu-latest` |
-
-```bash
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-构建配置见 `.github/workflows/release.yml`，启动脚本与依赖清单在 `packaging/`。
-便携包默认关闭登录门禁、持仓为空；数据与配置均在本机，不入包。
 
 ---
 
@@ -302,36 +143,11 @@ git push origin v0.1.1
 
 | 文件 | 说明 |
 |------|------|
-| `config/settings.yaml` | 回测/费用等默认参数 |
-| `config/holdings.yaml.example` | 旧版 YAML 示例；现持仓在 **`config/holdings.db`** |
-| `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证 |
+| `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证（SMTP/Server酱/飞书/ai） |
+| `config/holdings.yaml` / `.db` | 持仓配置与 SQLite 数据（本地） |
+| `config/users.yaml` | 看板登录（不存在时自动放行） |
 
-**不要**把 `notify.yaml`、真实 `holdings.db`、SMTP / Server酱 / 飞书密钥提交到 Git。
-
----
-
-## 实盘适配器
-
-| 文件 | 说明 |
-|------|------|
-| `execution/paper_broker.py` | 模拟成交，开箱可用 |
-| `execution/binance_broker.py` | 币安骨架 → 接 `python-binance`（建议先 Testnet） |
-| `execution/ibkr_broker.py` | 盈透骨架 → 接 `ib_insync` + TWS/Gateway Paper |
-| `execution/ctp_broker.py` | CTP 期货骨架 → 接 `vnpy_ctp` / 柜台 API + SimNow |
-
-SDK **不随本仓库分发**，需自行安装并在 `# TODO` 处接线。步骤见 [`docs/LIVE_BROKERS.md`](docs/LIVE_BROKERS.md)。
-
----
-
-## 开发
-
-```bash
-pip install -e ".[dev]"
-pytest -q
-ruff check .    # 若已安装 ruff
-```
-
-贡献约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+**不要**把 `notify.yaml`、真实 `holdings.db`、SMTP / Server酱 / 飞书密钥提交到 Git（`.gitignore` 已覆盖）。
 
 ---
 
@@ -340,26 +156,26 @@ ruff check .    # 若已安装 ruff
 | 能力 | Windows | macOS | Linux |
 |------|---------|-------|-------|
 | `python deploy/ctl.py` | ✅ | ✅ | ✅ |
-| `deploy/ctl.bat` | ✅ | — | — |
-| `deploy/ctl.ps1` | ✅ | — | — |
-| `deploy/ctl.sh` | 需 WSL/Git Bash | ✅ | ✅ |
+| `deploy/restart.sh` | 需 WSL/Git Bash | ✅ | ✅ |
 | Streamlit 看板 | ✅ | ✅ | ✅ |
-| `trade_monitor` 本机通知 | 视实现 | 偏 macOS | 视实现 |
+| `trade_monitor` 粘贴成交 | 视实现 | 偏 macOS | 视实现 |
 
 **不依赖 shell 脚本**：全程使用 `python deploy/ctl.py ...` 即可管理服务。
 
 ---
 
-## 路线与状态（摘要）
+## 开发
 
-已落地：工程基建（MIT / pyproject / tests）、A 股 T+1 / 涨跌停 / 量能、组合权重与下单频率、网格与 Walk-Forward、基准对比、Paper 线程安全与定时拉行情、多源降级、卖出区间深套路径、统一看板（单端口）、跨平台 ctl、定时分析推送（持仓与看板同库）。
+```bash
+pip install -e ".[dev]"
+pytest -q
+ruff check stock_analysis dashboard utils examples
+```
 
-V2（`main-v2` 分支，P0–P4 已落地）：双评分体系、机会引擎（支撑阻力 / 入场区间 / 止损 / 三档目标 / 风险收益比 / 仓位）、TradingPlan 决策状态、Trading Plan 历史回测（严格防 look-ahead）、AI 分析师（只解释不定价）、今日机会看板页、邮件模板新增「今日机会 · 交易计划」区块。全套 170 项测试通过。
-
-实盘券商通道仍为骨架；接入前请先用 Paper 全链路验证。P5 模拟盘 / P6 自动交易按计划书原则，待回测验证充分后再扩展。
+V2 设计文档（中英）：`docs/quant_trading_system_v2_dev_plan_zh.md` / `_en.md`。
 
 ---
 
 ## 致谢
 
-数据层可插拔设计便于替换为 Tushare / 券商行情等；欢迎 Issue / PR。
+数据接口：akshare / yfinance / 新浪 / 腾讯行情。仅供研究学习，不构成投资建议。
