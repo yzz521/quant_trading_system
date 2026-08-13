@@ -1,7 +1,7 @@
 # quant_trading_system · GP助手
 
 **main-v3 精简版** —— 每日投资决策助手，只保留三块核心功能：
-**今日计划**（评分/入场/止损/目标/风险收益比/仓位 + 回测验证 + AI 解读）、**我的持仓**、**持仓卖出/加仓参考**，支持每日邮件推送与本地看板。
+**今日计划**（全市场筛选 → 板块轮动 → 9 因子评分 → 交易计划 + 回测验证 + AI 解读）、**我的持仓**、**持仓卖出/加仓参考**，支持每日邮件推送与本地看板。
 
 - **License**: MIT
 - **Python**: ≥ 3.10
@@ -14,12 +14,33 @@
 
 | 功能 | 说明 | 入口 |
 |------|------|------|
-| 🎯 **今日计划** | 个股双评分（Stock / Opportunity）→ 机会引擎 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态（BULL/NEUTRAL/BEAR/HIGH_RISK）调节仓位 | 看板「今日机会」页、`examples/run_opportunity.py` |
+| 🎯 **今日计划** | 全市场初筛（A股5542/港股/美股7000+）→ 板块轮动 → 9 因子评分 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态调节仓位 | 看板「今日机会」页、`examples/run_opportunity.py` |
 | 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步 | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
 | 🎯 **卖出/加仓参考** | 卖出一二档、止损、深套分批路径、加仓参考 | 看板持仓页、每日邮件区块 |
 | 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | `examples/run_scheduler.py` |
 
 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）。量化负责计算、AI 负责解释、回测负责验证、**你做最终决策**。
+
+---
+
+## 筛选流水线（今日推荐怎么来的）
+
+```
+全市场快照（秒级）
+   ↓ ① Hard Filter：成交额下限 + 涨跌幅区间 + 名称剔除(*ST/退/新股)
+Top N 候选（默认 30，可调 5~80）
+   ↓ ② 板块轮动：新浪 49 行业强度排名（涨跌幅60%+成交额40%百分位）
+   ↓ ③ 9 因子评分（权重和=1.00）
+        fundamental .12  growth .08  technical .20  momentum .05
+        capital_flow .15  valuation .10  market_env .05  sector .05  risk .20
+   ↓ ④ 机会引擎：支撑阻力 → 入场 → 止损/目标 → RR → 仓位 → 决策
+🟢 买入列表（BUY_NOW / BUY_ON_PULLBACK）  🟡 关注列表（WATCH）
+```
+
+- **初筛**（`screener.py`）：全市场快照一次拉取，不拉 K 线秒级完成。A股/港股按成交额过滤；美股用 nasdaq 官方 API（市值≥100亿美元），失败回退知名池
+- **板块轮动**（`sector.py`）：新浪 49 行业强度 + 全市场成分映射（24h 缓存），强势板块候选加分；未命中中性 50
+- **9 因子评分**（`scoring/`）：Growth 成长（营收/净利同比，单票详情拉取）、Momentum 动量（20/60日收益+RSI）、Sector 板块强度为 main-v3 新增
+- **决策**：RR<1.5 → AVOID 过滤；其余按机会分排序展示，看板分「买入列表/关注列表」双 tab
 
 ---
 
@@ -59,7 +80,7 @@ pip install akshare streamlit
 ### 3. 运行测试与示例
 
 ```bash
-pytest -q                          # 96 项测试
+pytest -q                          # 120 项测试
 ruff check stock_analysis dashboard utils examples
 
 # 单票交易计划（联网，默认 600000）
@@ -90,7 +111,7 @@ cp config/notify.yaml.example config/notify.yaml
 # 打开 notify.email.enabled，填写 SMTP 授权码与收件人
 # opportunity.enabled=true 后，邮件将包含「今日机会 · 交易计划」区块
 #   index_symbol: 市场状态参考指数（sh000001 上证 / sh000300 沪深300）
-#   max_stocks / account_equity / workers / min_opportunity_score
+#   max_stocks: 全市场初筛候选上限 / account_equity / workers / min_opportunity_score
 ```
 
 2. 测试一发（可指定市场，不依赖是否开盘）：
@@ -117,15 +138,17 @@ python deploy/ctl.py scheduler start
 quant_trading_system/
 ├── stock_analysis/          # 核心逻辑
 │   ├── opportunity/         # 支撑阻力/入场/止损/目标/RR/仓位/TradingPlan/机会引擎/批量扫描
-│   ├── scoring/             # Stock Score（个股质量）+ Opportunity Score（可交易性）
+│   ├── scoring/             # 9 因子 Stock Score + Opportunity Score（可交易性）
 │   ├── market/              # 市场状态（真实指数）/ 宽度 / 风险
 │   ├── backtest/            # Trading Plan 历史回测（严格防 look-ahead）
 │   ├── ai/                  # AI 分析师（量化结果 → 自然语言，只解释不定价）
+│   ├── screener.py          # 全市场初筛器（A股/港股/美股）
+│   ├── sector.py            # 板块轮动（新浪 49 行业强度 + 成分映射）
 │   ├── holdings.py          # 我的持仓（SQLite）
 │   ├── sell_zone.py         # 卖出区间（含深套分批路径）
 │   ├── holdings_action.py   # 卖出/加仓参考
 │   ├── trade_monitor.py     # 粘贴成交解析 + 同步持仓（parser + apply_trade）
-│   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级）
+│   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级 + 成长因子）
 │   ├── indicators.py        # 技术指标（MA/MACD/RSI/KDJ/BOLL/ATR 等）
 │   ├── notifier.py          # 邮件/Server酱/飞书推送
 │   └── scheduler.py         # 交易时段调度器
@@ -133,7 +156,7 @@ quant_trading_system/
 ├── deploy/                  # restart.sh / ctl.py（跨平台管理）
 ├── examples/                # 7 个冒烟脚本
 ├── config/                  # notify.yaml.example、holdings.yaml（勿提交真实密钥）
-├── tests/                   # 96 项测试
+├── tests/                   # 120 项测试
 └── docs/
 ```
 
@@ -178,4 +201,4 @@ V2 设计文档（中英）：`docs/quant_trading_system_v2_dev_plan_zh.md` / `_
 
 ## 致谢
 
-数据接口：akshare / yfinance / 新浪 / 腾讯行情。仅供研究学习，不构成投资建议。
+数据接口：akshare（新浪/同花顺）/ yfinance / nasdaq screener / 腾讯行情。仅供研究学习，不构成投资建议。
