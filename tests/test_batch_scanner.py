@@ -59,6 +59,14 @@ class TestDefaultLoader:
         assert detect_market("AAPL").market == "US"
         assert detect_market("MSFT").market == "US"
 
+    def test_detect_market_etf_prefixes(self):
+        """回归：1 开头深市 ETF 必须判 sz（曾被误判 sh 导致取价失败）。"""
+        assert detect_market("513310").symbol == "sh513310"   # 沪市ETF
+        assert detect_market("159558").symbol == "sz159558"   # 深市ETF（曾被误判 sh）
+        assert detect_market("600036").symbol == "sh600036"
+        assert detect_market("000001").symbol == "sz000001"
+        assert detect_market("200002").symbol == "sz200002"   # 深 B 股
+
     def test_default_loader_routes_by_market(self, monkeypatch):
         """回归：loader 按市场路由——CN 走新浪、HK 走腾讯、US 走 fetch_kline。
 

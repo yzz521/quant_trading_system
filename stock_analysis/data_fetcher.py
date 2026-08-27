@@ -42,9 +42,11 @@ def detect_market(code: str) -> MarketInfo:
     # A-share: 6 digit
     if code.isdigit() and len(code) == 6:
         prefix = code[0]
-        if prefix == "6":
+        if prefix == "6" or prefix == "5":
+            # 沪市股票 6 开头；沪市 ETF/LOF 5 开头（51/56/58）
             sym = "sh" + code
-        elif prefix in ("0", "3"):
+        elif prefix in ("0", "1", "2", "3"):
+            # 深市：0/3 股票、1 深市ETF/LOF（159/16x/18x）、2 B股
             sym = "sz" + code
         elif prefix in ("8", "4", "9"):
             sym = "bj" + code
@@ -211,16 +213,17 @@ def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
 
 
 def fetch_tencent_quotes(codes: list[str], batch: int = 50) -> Optional[pd.DataFrame]:
-    """腾讯批量行情（qt.gtimg.cn）→ 市值/PE/换手率等，约 50 只/请求。
+    """腾讯批量行情（qt.gtimg.cn）→ 现价/涨跌幅/市值/PE/换手率等，约 50 只/请求。
 
+    支持三市场（CN=sh/sz 前缀、HK=hk 前缀、US=us 前缀）。
     返回列：code/name/close/pct_chg/amount_wan/turnover/pe/float_cap_yi/
-           total_cap_yi/pb。用于漏斗 L2 质量过滤。
+           total_cap_yi/pb。
     """
     if not codes:
         return None
     rows: list[dict] = []
     for chunk in _batches(codes, batch):
-        syms = [detect_market(c).symbol for c in chunk]
+        syms = [_tencent_symbol(c) for c in chunk]
         url = "https://qt.gtimg.cn/q=" + ",".join(syms)
         try:
             _clear_proxy()
@@ -243,7 +246,7 @@ def fetch_tencent_quotes(codes: list[str], batch: int = 50) -> Optional[pd.DataF
                         return None
 
                 rows.append({
-                    "code": str(f[2]).zfill(6),
+                    "code": _norm_code(f[2]),
                     "name": f[1],
                     "close": _num(f[3]),
                     "pct_chg": _num(f[32]),
@@ -259,6 +262,31 @@ def fetch_tencent_quotes(codes: list[str], batch: int = 50) -> Optional[pd.DataF
     if not rows:
         return None
     return pd.DataFrame(rows)
+
+
+def _tencent_symbol(code: str) -> str:
+    """腾讯行情 symbol：CN=sh/sz/bj 前缀、HK=hk+5位、US=us+大写。"""
+    info = detect_market(code)
+    if info.market == "HK":
+        return "hk" + info.code.zfill(5)
+    if info.market == "US":
+        return "us" + info.code
+    return info.symbol  # CN: sh/sz/bj 前缀
+
+
+def _norm_code(raw: str) -> str:
+    """腾讯行情返回的代码标准化：美股去后缀保持大写原样；港股5位原样；A股6位。"""
+    s = str(raw).strip().upper()
+    if "." in s:  # 美股带交易所后缀（AAPL.OQ / MSFT.NQ）
+        s = s.split(".")[0]
+    if s.isalpha():  # 美股
+        return s
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return s
+    if len(digits) == 5:  # 港股
+        return digits
+    return digits.zfill(6)  # A股
 def fetch_kline_sina_api(info: MarketInfo, days: int = 120) -> pd.DataFrame:
     """新浪日K JSON 接口（纯 urllib，线程安全，带退避重试）。
 

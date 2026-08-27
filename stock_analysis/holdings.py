@@ -24,7 +24,7 @@ from typing import Optional
 import pandas as pd
 
 from ..utils import get_logger, load_yaml
-from .data_fetcher import detect_market, fetch_kline
+from .data_fetcher import detect_market, fetch_kline, fetch_tencent_quotes
 
 log = get_logger("Holdings")
 
@@ -280,6 +280,19 @@ class Holdings:
         results: list[dict] = []
         total_cost = total_value = 0.0
 
+        # 优先用腾讯实时价（盘中实时/收盘后收盘价）；失败项回退 K 线最新价
+        codes = [p["code"] for p in positions]
+        realtime: dict = {}
+        if codes:
+            try:
+                df = fetch_tencent_quotes(codes)
+                if df is not None and not df.empty:
+                    for _, r in df.iterrows():
+                        if r.get("close") is not None and not pd.isna(r.get("close")):
+                            realtime[str(r["code"]).upper()] = float(r["close"])
+            except Exception as e:  # noqa: BLE001
+                log.debug("实时行情批量获取失败，回退K线: %s", e)
+
         for p in positions:
             code = p["code"]
             cost_price = float(p["cost_price"])
@@ -295,9 +308,13 @@ class Holdings:
             }
             try:
                 info = detect_market(code)
-                df = fetch_kline(info, days=10)
-                if not df.empty:
-                    price = float(df["close"].iloc[-1])
+                price = realtime.get(code.upper())
+                if price is None:
+                    # 实时未取到 → 回退 K 线最新价（可能是昨收，标注口径）
+                    df = fetch_kline(info, days=10)
+                    if not df.empty:
+                        price = float(df["close"].iloc[-1])
+                if price is not None and price > 0:
                     value = price * qty
                     pnl = value - cost
                     entry.update({
