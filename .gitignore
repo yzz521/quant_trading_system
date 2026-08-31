@@ -22,6 +22,9 @@ reasonix.toml
 results/
 *.tar.gz
 
+# ---- PyInstaller 打包产物 ----
+build/
+
 # ---- 个人敏感配置（本地保留，切勿提交）----
 config/notify.yaml
 config/holdings.yaml

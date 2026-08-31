@@ -33,8 +33,9 @@ dependencies = [
 [project.optional-dependencies]
 data = ["akshare>=1.10", "yfinance>=0.2.30"]
 dashboard = ["streamlit>=1.28"]
+gui = ["pywebview>=5.0"]
 dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4"]
-all = ["quant-trading-system[data,dashboard,dev]"]
+all = ["quant-trading-system[data,dashboard,gui,dev]"]
 
 [project.urls]
 Homepage = "https://github.com/yzz521/quant_trading_system"
