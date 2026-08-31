@@ -62,6 +62,42 @@ logging.basicConfig(
 log = logging.getLogger("App")
 
 PORT = int(os.environ.get("PORT", "8502"))
+# 单实例锁端口（与 streamlit 端口独立；绑定失败 = 已有实例在运行）
+LOCK_PORT = int(os.environ.get("LOCK_PORT", "8503"))
+
+# 锁 socket 需保活（否则 GC 后端口释放，锁失效）
+_LOCK_SOCKET: socket.socket | None = None
+
+
+def acquire_singleton() -> bool:
+    """独占绑定锁端口；返回 False 说明已有 GP助手 实例在运行。
+
+    注意：不要设置 SO_REUSEADDR——macOS/Windows 上它允许第二个监听
+    socket 绑定同一端口（劫持），会破坏单例锁的排他性。锁 socket 从不
+    accept 连接，进程退出即释放端口，无需处理 TIME_WAIT。
+    """
+    global _LOCK_SOCKET  # noqa: PLW0603
+    # 幂等：本进程已持有锁则直接成功（避免先覆盖引用导致旧 socket 被 GC 关闭、锁被释放）
+    if _LOCK_SOCKET is not None:
+        return True
+    try:
+        _LOCK_SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _LOCK_SOCKET.bind(("127.0.0.1", LOCK_PORT))
+        _LOCK_SOCKET.listen(1)
+        return True
+    except OSError:
+        _LOCK_SOCKET = None
+        return False
+
+
+def _alert(title: str, msg: str) -> None:
+    """Windows 弹窗提示；其他平台打印到 stderr。"""
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, msg, title, 0x10)  # MB_ICONERROR
+    else:
+        print(f"[{title}] {msg}", file=sys.stderr)
 
 
 def _port_free(port: int) -> bool:
@@ -82,6 +118,20 @@ def _wait_port(port: int, timeout: float = 60.0) -> bool:
         except OSError:
             time.sleep(0.3)
     return False
+
+
+def _kill_process_tree(proc: subprocess.Popen | None) -> None:
+    """终止进程及其整棵子进程树（Windows 用 taskkill /T，避免子进程残留堆积）。"""
+    if proc is None or proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+    else:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 # --------------------------------------------------------------------------- #
@@ -122,11 +172,7 @@ class DashboardServer:
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+            _kill_process_tree(self.proc)
             log.info("看板子进程已停止")
 
 
@@ -178,6 +224,12 @@ class SchedulerThread(threading.Thread):
 def main() -> None:
     import webview
 
+    # 单实例锁：已有实例在运行则提示退出，避免多实例反复拉起子进程把内存吃满
+    if not acquire_singleton():
+        log.warning("已有 GP助手 实例在运行，本次启动退出")
+        _alert("GP助手已在运行", "检测到已有 GP助手 正在运行。\n请先在任务管理器确认，或关闭旧实例后再启动。")
+        sys.exit(0)
+
     # 端口占用则自动换空闲端口（避免与旧实例冲突）
     port = PORT
     if not _port_free(port):
@@ -197,6 +249,14 @@ def main() -> None:
     if not _wait_port(port):
         log.error("看板服务未就绪，退出")
         dashboard.stop()
+        _alert(
+            "看板启动失败",
+            "GP助手 看板服务未能启动。\n\n"
+            "常见原因与处理：\n"
+            "1. 内存不足：关闭其他大程序后重试\n"
+            "2. 杀毒软件拦截：临时退出 360/火绒/Defender 实时防护\n"
+            "3. 若反复出现，请查看日志：" + str(RESULTS_DIR / "app.log"),
+        )
         sys.exit(1)
     log.info("看板就绪: http://127.0.0.1:%d", port)
 
