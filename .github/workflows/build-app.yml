@@ -22,11 +22,13 @@ jobs:
           - os: macos-latest      # Apple Silicon
             artifact: GP助手-macOS-arm64.zip
             pack: |
-              cd dist && ditto -c -k --sequesterRsrc "GP助手.app" "GP助手-macOS-arm64.zip"
+              # zip -r 而非 ditto：ditto 在 CI runner 上对 Unicode 名 .app bundle
+              # 识别失败，会把 Contents/ 散件直放 zip 顶层；zip 老实按目录打包即可
+              cd dist && zip -qr GP助手-macOS-arm64.zip GP助手.app
           - os: macos-26-intel    # Intel Mac
             artifact: GP助手-macOS-x64.zip
             pack: |
-              cd dist && ditto -c -k --sequesterRsrc "GP助手.app" "GP助手-macOS-x64.zip"
+              cd dist && zip -qr GP助手-macOS-x64.zip GP助手.app
           - os: windows-latest
             artifact: GP助手-Windows.zip
             pack: |
