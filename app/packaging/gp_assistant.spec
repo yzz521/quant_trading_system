@@ -15,6 +15,11 @@
   * 数据目录（config/notify.yaml、holdings.db、results/）由 app/main.py 的
     QTS_DATA_DIR 决定，默认在可执行文件旁的 config/ —— 不要打进包
   * Streamlit 有较多动态导入，需 hiddenimports 补齐
+  * 不启用 UPX（upx=False）：Windows 端曾出现启动崩溃
+    "MemoryError: Unable to allocate output buffer"（pyi_rth_inspect →
+    pyimod01_archive extract → zlib.decompress 分配解压缓冲区失败），
+    UPX 压缩 PYZ/base_library.zip 大条目是头号嫌疑；PyInstaller 官方默认
+    也不启用 UPX，关闭后体积略增但更稳。
 """
 
 import os
@@ -188,7 +193,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False if IS_WIN else True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -203,7 +208,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="GP助手",
 )
