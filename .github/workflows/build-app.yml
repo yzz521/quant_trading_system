@@ -1,0 +1,83 @@
+name: build-app
+
+# 三端桌面应用自动打包：
+#   push v* tag → 在 macOS/Windows/Linux 三个 runner 上 PyInstaller 打包
+#   → 产物上传 GitHub Release（Releases 页面直接下载安装）
+#   也可手动触发（Actions → build-app → Run workflow）
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest      # Apple Silicon
+            artifact: GP助手-macOS-arm64.zip
+            pack: |
+              cd dist && ditto -c -k --sequesterRsrc "GP助手.app" "GP助手-macOS-arm64.zip"
+          - os: macos-26-intel    # Intel Mac
+            artifact: GP助手-macOS-x64.zip
+            pack: |
+              cd dist && ditto -c -k --sequesterRsrc "GP助手.app" "GP助手-macOS-x64.zip"
+          - os: windows-latest
+            artifact: GP助手-Windows.zip
+            pack: |
+              cd dist && powershell -NoProfile -Command "Compress-Archive -Path 'GP助手' -DestinationPath 'GP助手-Windows.zip'"
+          - os: ubuntu-latest
+            artifact: GP助手-Linux.tar.gz
+            pack: |
+              cd dist && tar czf GP助手-Linux.tar.gz GP助手
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Linux 需要 GTK/WebKit 系统库（pywebview gtk 后端 import 依赖）
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgirepository1.0-dev gir1.2-webkit2-4.1 python3-gi
+
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[data,dashboard,gui]" pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          # 仓库根即 quant_trading_system 包，spec 用 SPECPATH 定位（无需额外配置）
+          pyinstaller app/packaging/gp_assistant.spec --noconfirm
+          ls -la dist/
+
+      - name: Package artifact
+        shell: bash
+        run: ${{ matrix.pack }}
+
+      # 手动触发（workflow_dispatch）也能在 Actions 页下载临时产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+      # tag 触发 → 附到 GitHub Release
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}
