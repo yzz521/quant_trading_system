@@ -46,7 +46,21 @@ Top N 候选（默认 30，可调 5~80）
 
 ## 快速开始
 
-### 1. 安装
+### 0. 桌面应用（推荐，可安装）
+
+把看板 + 定时推送打包成原生桌面应用（macOS / Windows / Linux），双击即用、
+无需终端和浏览器标签页，关窗即停调度：
+
+```bash
+pip install -e ".[data,dashboard,gui]" pyinstaller
+python app/main.py                  # 开发模式（本机直接跑窗口）
+pyinstaller app/packaging/gp_assistant.spec --noconfirm   # 打包 .app/.exe
+```
+
+macOS 产物 `dist/GP助手.app`；Windows/Linux 用同一 spec 在对应平台构建。
+详见 [`app/README.md`](app/README.md)。
+
+### 1. 安装（服务模式）
 
 ```bash
 git clone https://github.com/yzz521/quant_trading_system.git
