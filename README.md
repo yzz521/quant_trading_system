@@ -52,9 +52,17 @@ Top N 候选（默认 30，可调 5~80）
 无需终端和浏览器标签页，关窗即停调度：
 
 ```bash
+# 本地打包（调试用）
 pip install -e ".[data,dashboard,gui]" pyinstaller
-python app/main.py                  # 开发模式（本机直接跑窗口）
-pyinstaller app/packaging/gp_assistant.spec --noconfirm   # 打包 .app/.exe
+pyinstaller app/packaging/gp_assistant.spec --noconfirm
+```
+
+**自动构建（推荐）**：push `v*` tag 即触发 GitHub Actions 三端自动打包，
+产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
+
+```bash
+git tag v0.3.2 && git push origin v0.3.2
+# → Releases 自动出现：GP助手-macOS-arm64/x64.zip、GP助手-Windows.zip、GP助手-Linux.tar.gz
 ```
 
 macOS 产物 `dist/GP助手.app`；Windows/Linux 用同一 spec 在对应平台构建。
