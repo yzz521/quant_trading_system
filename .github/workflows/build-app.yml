@@ -58,6 +58,7 @@ jobs:
           pip install -e ".[data,dashboard,gui]" pyinstaller
 
       - name: Build with PyInstaller
+        shell: bash
         run: |
           # 仓库根即 quant_trading_system 包，spec 用 SPECPATH 定位（无需额外配置）
           pyinstaller app/packaging/gp_assistant.spec --noconfirm
