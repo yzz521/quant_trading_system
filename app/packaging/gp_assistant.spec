@@ -7,8 +7,8 @@
 
 产物:
     macOS:   dist/GP助手.app
-    Windows: dist/GP助手.exe
-    Linux:   dist/GP助手
+    Windows: dist/GPAssistant/GPAssistant.exe
+    Linux:   dist/GP助手/GP助手
 
 说明:
   * onedir 模式（非 onefile），启动更快、调试方便
@@ -49,8 +49,12 @@ datas = _qts_datas
 binaries = _qts_binaries
 hiddenimports = list(_qts_hidden)
 
-# config 模板（collect_all 不含非 py 文件）
-datas += [("../../config/notify.yaml.example", "config")]
+# config 模板 + 看板脚本（Streamlit 必须读磁盘上的 .py；collect_all 虽会带上，
+# 但显式拷到 quant_trading_system/dashboard 以免漏 pages/*.py）
+datas += [
+    ("../../config/notify.yaml.example", "config"),
+    ("../../dashboard", "quant_trading_system/dashboard"),
+]
 
 # --------------------------------------------------------------------------- #
 # 隐藏导入：Streamlit 动态加载的模块（追加到 collect_all 结果之后）
@@ -184,12 +188,17 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# Windows 用 ASCII 文件名：中文 GP助手.exe 在部分英文系统/解压工具下无法启动，
+# 且 GitHub Release 会把「助手」从资源名里剥掉变成 GP.-Windows.zip
+EXE_NAME = "GPAssistant" if IS_WIN else "GP助手"
+DIR_NAME = "GPAssistant" if IS_WIN else "GP助手"
+
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name="GP助手",
+    name=EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -210,7 +219,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="GP助手",
+    name=DIR_NAME,
 )
 
 if IS_MAC:

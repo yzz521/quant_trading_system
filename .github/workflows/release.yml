@@ -54,6 +54,9 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             PY="$(cygpath -u "$PY")"
           fi
+          # 解析真实路径：uv 在 macOS 上常给出 symlink，后面的 dirname/cp 会拷到空 runtime
+          PY="$("$PY" -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+          echo "uv python (realpath): $PY"
           BIN_DIR="$(dirname "$PY")"
           PY_NAME="$(basename "$PY")"
           if [ "$(basename "$BIN_DIR")" = "bin" ]; then
@@ -66,7 +69,20 @@ jobs:
           else
             PY_BIN="$B/runtime/bin/$PY_NAME"
           fi
-          cp -R "$PRT" "$B/runtime"
+          echo "python prefix: $PRT"
+          mkdir -p "$B/runtime"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            rsync -a --copy-links "$PRT"/ "$B/runtime/"
+          else
+            cp -R "$PRT/." "$B/runtime/"
+          fi
+          RT_MB=$(du -sm "$B/runtime" | awk '{print $1}')
+          echo "runtime size: ${RT_MB}MB"
+          if [ "$RT_MB" -lt 20 ]; then
+            echo "ERROR: runtime too small (${RT_MB}MB), python copy likely a symlink" >&2
+            ls -la "$B/runtime" >&2
+            exit 1
+          fi
           # 统一提供 runtime/bin/python3 入口（uv 各版本 bin 软链命名不一，缺则补软链）
           if [ "$RUNNER_OS" != "Windows" ] && [ ! -e "$B/runtime/bin/python3" ]; then
             ln -s "$PY_NAME" "$B/runtime/bin/python3"
@@ -85,13 +101,15 @@ jobs:
       - name: Zip bundle
         shell: bash
         run: |
-          cd dist
+          set -euo pipefail
+          PY="$(command -v python3 || command -v python)"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            powershell -NoProfile -Command "Compress-Archive -Path quant_trading_system-portable -DestinationPath ${{ matrix.artifact }}"
+            # 不用 Compress-Archive：它写入反斜杠路径，部分解压工具会得到损坏的目录树
+            "$PY" app/packaging/make_zip.py "dist/${{ matrix.artifact }}" dist/quant_trading_system-portable
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            ditto -c -k --sequesterRsrc quant_trading_system-portable "${{ matrix.artifact }}"
+            ditto -c -k --sequesterRsrc dist/quant_trading_system-portable "dist/${{ matrix.artifact }}"
           else
-            zip -qr "${{ matrix.artifact }}" quant_trading_system-portable
+            (cd dist && zip -qr "${{ matrix.artifact }}" quant_trading_system-portable)
           fi
 
       - name: Upload release asset

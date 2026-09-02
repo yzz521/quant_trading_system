@@ -64,6 +64,9 @@ log = logging.getLogger("App")
 PORT = int(os.environ.get("PORT", "8502"))
 # 单实例锁端口（与 streamlit 端口独立；绑定失败 = 已有实例在运行）
 LOCK_PORT = int(os.environ.get("LOCK_PORT", "8503"))
+# 打包后不能用 `exe -m streamlit`：那会再启动一份 GUI（v0.3.5 单例锁会立刻杀掉子进程，
+# 看板永远起不来）。用哨兵参数让同一个 exe 走 Streamlit 子进程分支。
+DASHBOARD_FLAG = "--run-dashboard"
 
 # 锁 socket 需保活（否则 GC 后端口释放，锁失效）
 _LOCK_SOCKET: socket.socket | None = None
@@ -134,6 +137,59 @@ def _kill_process_tree(proc: subprocess.Popen | None) -> None:
             proc.kill()
 
 
+def _dashboard_script() -> Path:
+    """Streamlit 入口脚本（必须是磁盘上的 .py；打包后在 _MEIPASS 下）。"""
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS"))  # noqa: SLF001
+        roots = [
+            meipass / "quant_trading_system" / "dashboard",
+            meipass / "dashboard",
+        ]
+    else:
+        roots = [Path(__file__).resolve().parents[1] / "dashboard"]
+    for root in roots:
+        p = root / "首页.py"
+        if p.is_file():
+            return p
+    tried = ", ".join(str(r / "首页.py") for r in roots)
+    raise FileNotFoundError(f"找不到看板入口 首页.py，已试: {tried}")
+
+
+def _parse_dashboard_argv(argv: list[str]) -> tuple[int, Path]:
+    """解析 `[exe, --run-dashboard, PORT, SCRIPT]`。"""
+    idx = argv.index(DASHBOARD_FLAG)
+    port = int(argv[idx + 1])
+    script = Path(argv[idx + 2])
+    return port, script
+
+
+def _run_dashboard_child(argv: list[str]) -> None:
+    """冻结 exe 作为看板子进程：只跑 Streamlit，不创建窗口、不抢单例锁。"""
+    try:
+        port, script = _parse_dashboard_argv(argv)
+    except (ValueError, IndexError):
+        print(f"invalid {DASHBOARD_FLAG} argv: {argv}", file=sys.stderr)
+        sys.exit(2)
+    if not script.is_file():
+        print(f"dashboard script missing: {script}", file=sys.stderr)
+        sys.exit(3)
+    from streamlit.web import bootstrap
+
+    bootstrap.run(
+        str(script),
+        False,
+        [],
+        {
+            "server.port": port,
+            "server.address": "127.0.0.1",
+            "server.headless": True,
+            "browser.gatherUsageStats": False,
+            "server.fileWatcherType": "none",
+            "global.developmentMode": False,
+        },
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 后台服务线程
 # --------------------------------------------------------------------------- #
@@ -146,26 +202,35 @@ class DashboardServer:
 
     def start(self) -> None:
         env = os.environ.copy()
-        if not getattr(sys, "frozen", False):
+        try:
+            script = _dashboard_script()
+        except FileNotFoundError as e:
+            log.error("看板脚本缺失: %s", e)
+            self.proc = None
+            return
+        if getattr(sys, "frozen", False):
+            # 同一个冻结 exe，走 --run-dashboard 分支（不要 -m streamlit）
+            cmd = [sys.executable, DASHBOARD_FLAG, str(self.port), str(script)]
+        else:
             # 开发模式：仓库根 = quant_trading_system 包，父目录进 PYTHONPATH
             env["PYTHONPATH"] = str(BASE.parent) + os.pathsep + env.get("PYTHONPATH", "")
-        cmd = [
-            sys.executable, "-m", "streamlit", "run",
-            str(BASE / "dashboard" / "首页.py"),
-            "--server.port", str(self.port),
-            "--server.address", "127.0.0.1",
-            "--server.headless", "true",
-            "--browser.gatherUsageStats", "false",
-        ]
+            cmd = [
+                sys.executable, "-m", "streamlit", "run",
+                str(script),
+                "--server.port", str(self.port),
+                "--server.address", "127.0.0.1",
+                "--server.headless", "true",
+                "--browser.gatherUsageStats", "false",
+            ]
         try:
             self.proc = subprocess.Popen(
                 cmd,
-                cwd=BASE,
+                cwd=str(script.parent),
                 env=env,
                 stdout=open(RESULTS_DIR / "dashboard.log", "a", encoding="utf-8"),
                 stderr=subprocess.STDOUT,
             )
-            log.info("看板子进程已启动 pid=%s", self.proc.pid)
+            log.info("看板子进程已启动 pid=%s script=%s", self.proc.pid, script)
         except Exception as e:  # noqa: BLE001
             log.error("看板子进程启动失败: %s", e)
             self.proc = None
@@ -222,7 +287,18 @@ class SchedulerThread(threading.Thread):
 # 主入口
 # --------------------------------------------------------------------------- #
 def main() -> None:
-    import webview
+    try:
+        import webview
+    except Exception as e:  # noqa: BLE001
+        log.exception("加载窗口组件失败")
+        _alert(
+            "缺少运行库",
+            "无法加载桌面窗口组件。\n\n"
+            f"{type(e).__name__}: {e}\n\n"
+            "Windows 请安装 Edge WebView2 Runtime：\n"
+            "https://developer.microsoft.com/microsoft-edge/webview2/",
+        )
+        sys.exit(1)
 
     # 单实例锁：已有实例在运行则提示退出，避免多实例反复拉起子进程把内存吃满
     if not acquire_singleton():
@@ -279,4 +355,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+    if DASHBOARD_FLAG in sys.argv:
+        _run_dashboard_child(sys.argv)
+    else:
+        try:
+            main()
+        except SystemExit:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.exception("启动失败")
+            _alert(
+                "GP助手启动失败",
+                f"{type(e).__name__}: {e}\n\n日志: {RESULTS_DIR / 'app.log'}",
+            )
+            sys.exit(1)

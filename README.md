@@ -61,11 +61,17 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.2 && git push origin v0.3.2
-# → Releases 自动出现：GP助手-macOS-arm64/x64.zip、GP助手-Windows.zip、GP助手-Linux.tar.gz
+git tag v0.3.6 && git push origin v0.3.6
+# → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 
-macOS 产物 `dist/GP助手.app`；Windows/Linux 用同一 spec 在对应平台构建。
+下载后：
+
+- **Windows**：解压整个 `GPAssistant` 文件夹，双击 `GPAssistant.exe`。若 SmartScreen 提示「已保护你的电脑」→「更多信息」→「仍要运行」。不要只拷贝 exe。
+- **macOS（无需 Apple 开发者账号 / 公证）**：解压后双击 `首次打开.command`（会去掉隔离属性并做本机临时签名）。或在终端执行：
+  `xattr -cr GP助手.app && codesign --force --deep --sign - GP助手.app && open GP助手.app`
+
+macOS 产物 `dist/GP助手.app`；Windows 产物 `dist/GPAssistant/GPAssistant.exe`。
 详见 [`app/README.md`](app/README.md)。
 
 ### 1. 安装（服务模式）

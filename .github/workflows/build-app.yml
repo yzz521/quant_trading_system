@@ -4,6 +4,8 @@ name: build-app
 #   push v* tag → 在 macOS/Windows/Linux 三个 runner 上 PyInstaller 打包
 #   → 产物上传 GitHub Release（Releases 页面直接下载安装）
 #   也可手动触发（Actions → build-app → Run workflow）
+#
+# 产物文件名必须 ASCII：GitHub Release 会把「助手」从资源名剥掉变成 GP.-Windows.zip
 
 on:
   push:
@@ -20,23 +22,13 @@ jobs:
       matrix:
         include:
           - os: macos-latest      # Apple Silicon
-            artifact: GP助手-macOS-arm64.zip
-            pack: |
-              # zip -r 而非 ditto：ditto 在 CI runner 上对 Unicode 名 .app bundle
-              # 识别失败，会把 Contents/ 散件直放 zip 顶层；zip 老实按目录打包即可
-              cd dist && zip -qr GP助手-macOS-arm64.zip GP助手.app
+            artifact: GP-Assistant-macOS-arm64.zip
           - os: macos-26-intel    # Intel Mac
-            artifact: GP助手-macOS-x64.zip
-            pack: |
-              cd dist && zip -qr GP助手-macOS-x64.zip GP助手.app
+            artifact: GP-Assistant-macOS-x64.zip
           - os: windows-latest
-            artifact: GP助手-Windows.zip
-            pack: |
-              cd dist && powershell -NoProfile -Command "Compress-Archive -Path 'GP助手' -DestinationPath 'GP助手-Windows.zip'"
+            artifact: GP-Assistant-Windows.zip
           - os: ubuntu-latest
-            artifact: GP助手-Linux.tar.gz
-            pack: |
-              cd dist && tar czf GP助手-Linux.tar.gz GP助手
+            artifact: GP-Assistant-Linux.tar.gz
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -62,13 +54,44 @@ jobs:
       - name: Build with PyInstaller
         shell: bash
         run: |
-          # 仓库根即 quant_trading_system 包，spec 用 SPECPATH 定位（无需额外配置）
           pyinstaller app/packaging/gp_assistant.spec --noconfirm
           ls -la dist/
 
+      - name: Verify bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            test -f dist/GPAssistant/GPAssistant.exe
+            test -f dist/GPAssistant/_internal/quant_trading_system/dashboard/首页.py
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            test -d dist/GP助手.app
+            test -f dist/GP助手.app/Contents/Resources/quant_trading_system/dashboard/首页.py
+          else
+            test -f dist/GP助手/GP助手
+            test -f dist/GP助手/_internal/quant_trading_system/dashboard/首页.py
+          fi
+
       - name: Package artifact
         shell: bash
-        run: ${{ matrix.pack }}
+        run: |
+          set -euo pipefail
+          chmod +x packaging/mac-first-open.command
+          cp packaging/desktop-readme.txt dist/使用说明.txt
+          PY="$(command -v python3 || command -v python)"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$PY" app/packaging/make_zip.py "dist/${{ matrix.artifact }}" dist/GPAssistant dist/使用说明.txt
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            # 无 Apple 账号：本机 ad-hoc 签名（用户下载后仍须去隔离，见 首次打开.command）
+            codesign --force --deep --sign - "dist/GP助手.app"
+            cp packaging/mac-first-open.command "dist/首次打开.command"
+            chmod +x "dist/首次打开.command"
+            "$PY" app/packaging/make_zip.py "dist/${{ matrix.artifact }}" \
+              "dist/GP助手.app" "dist/首次打开.command" dist/使用说明.txt
+          else
+            tar -C dist -czf "dist/${{ matrix.artifact }}" GP助手 使用说明.txt
+          fi
+          ls -la dist/${{ matrix.artifact }}
 
       # 手动触发（workflow_dispatch）也能在 Actions 页下载临时产物
       - name: Upload artifact

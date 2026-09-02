@@ -26,9 +26,11 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物：
 | 平台 | 产物 | 备注 |
 |------|------|------|
-| macOS | `dist/GP助手.app` | 双击即用；可 `codesign`/`notarize` 后分发 |
-| Windows | `dist/GP助手/GP助手.exe` | Win10/11 自带 Edge WebView2 运行时 |
+| macOS | `dist/GP助手.app` | 无公证也可安装：解压后双击 `首次打开.command`，或 `xattr -cr GP助手.app` 后打开 |
+| Windows | `dist/GPAssistant/GPAssistant.exe` | Win10/11 自带 Edge WebView2；SmartScreen 点「仍要运行」 |
 | Linux | `dist/GP助手/GP助手` | 需 `python3-gi gir1.2-webkit2-4.1`（见下） |
+
+CI 上传的 zip 文件名为 ASCII（`GP-Assistant-Windows.zip` 等），避免 GitHub 把中文资源名剥成 `GP.-Windows.zip`。
 
 ## 平台依赖
 
@@ -43,12 +45,10 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 应用**不把数据打进安装包**，首次运行时在可执行文件旁自动创建：
 
 ```text
-GP助手/
-├── GP助手.app        # macOS（或 GP助手.exe / GP助手）
-└── config/
-    ├── notify.yaml   # ← 复制 notify.yaml.example 填写推送凭证
-    ├── holdings.db   # 持仓数据库（自动创建）
-    └── users.yaml    # 看板登录（可选）
+GPAssistant/          # Windows
+├── GPAssistant.exe
+└── config/           # 首次运行自动创建
+GP助手.app            # macOS（旁有 首次打开.command）
 ```
 
 也可用环境变量 `QTS_DATA_DIR` 指定数据目录（如 `~/Library/Application Support/GP助手`）。

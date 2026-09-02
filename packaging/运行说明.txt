@@ -24,6 +24,9 @@ GP助手 · 便携版（一键启动）
 
 【注意】
   - macOS 请选择与电脑芯片匹配的包（M系列 / Intel 不通用）。
+  - 若 start.command 提示找不到 runtime/bin/python3，说明下到了损坏的旧包
+    （v0.3.5 的 mac 便携包 runtime 是空的），请改下 GP-Assistant-macOS-*.zip
+    或重新打的 portable 包。
   - Linux 包基于较新的发行版构建，建议在相近或更新的系统上运行。
 
 【停止】关闭运行窗口即可。
