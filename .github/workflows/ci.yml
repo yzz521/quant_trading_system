@@ -20,7 +20,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          pip install -e ".[dev,dashboard]"
+          pip install -e ".[dev,data,dashboard]"
       - name: Lint
         run: ruff check stock_analysis dashboard utils examples || true
       - name: Test
