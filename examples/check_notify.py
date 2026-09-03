@@ -42,7 +42,7 @@ def main() -> int:
     if not enabled:
         print("⚠️  所有渠道 enabled=false，调度器会跑分析但不会发邮件/微信")
 
-    markets = cfg.get("enabled_markets") or ["CN", "HK", "US"]
+    markets = cfg.get("enabled_markets") or ["CN"]
     print(f"启用市场: {markets}")
 
     holdings_path = str(cfg_path.parent / "holdings.yaml")

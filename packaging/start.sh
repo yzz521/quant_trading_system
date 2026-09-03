@@ -15,7 +15,7 @@ fi
 echo "启动 GP助手看板 → http://127.0.0.1:${PORT}（首次启动约需 10-30 秒）"
 (sleep 3; command -v xdg-open >/dev/null 2>&1 && xdg-open "http://127.0.0.1:${PORT}" >/dev/null 2>&1 || true) &
 
-"$PY" -m streamlit run "quant_trading_system/dashboard/首页.py" \
+"$PY" -m streamlit run "quant_trading_system/dashboard/home.py" \
   --server.port "$PORT" --server.headless true
 
 echo "看板已停止。"

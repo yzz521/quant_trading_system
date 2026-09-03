@@ -49,7 +49,8 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install -U pip
-          pip install -e ".[data,dashboard,gui]" pyinstaller
+          pip uninstall -y quant-trading-system || true
+          pip install --prefer-binary --force-reinstall ".[data,dashboard,gui]" pyinstaller
 
       - name: Build with PyInstaller
         shell: bash
@@ -63,13 +64,15 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
             test -f dist/GPAssistant/GPAssistant.exe
-            test -f dist/GPAssistant/_internal/quant_trading_system/dashboard/首页.py
+            test -f dist/GPAssistant/_internal/quant_trading_system/dashboard/home.py
+            python app/packaging/verify_frozen_bundle.py dist/GPAssistant
+            dist/GPAssistant/GPAssistant.exe --smoke-frozen-imports
           elif [ "$RUNNER_OS" = "macOS" ]; then
             test -d dist/GP助手.app
-            test -f dist/GP助手.app/Contents/Resources/quant_trading_system/dashboard/首页.py
+            test -f dist/GP助手.app/Contents/Resources/quant_trading_system/dashboard/home.py
           else
             test -f dist/GP助手/GP助手
-            test -f dist/GP助手/_internal/quant_trading_system/dashboard/首页.py
+            test -f dist/GP助手/_internal/quant_trading_system/dashboard/home.py
           fi
 
       - name: Package artifact

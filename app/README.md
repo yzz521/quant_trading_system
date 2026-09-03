@@ -53,6 +53,9 @@ GP助手.app            # macOS（旁有 首次打开.command）
 
 也可用环境变量 `QTS_DATA_DIR` 指定数据目录（如 `~/Library/Application Support/GP助手`）。
 
+看板「配置」页（侧栏 `settings`）会把邮件开关、收件地址、监测市场（A股/港股/美股）
+写进该数据目录下的 `notify.yaml`，与定时推送共用同一份配置。
+
 ## 定时推送并入应用
 
 - **应用打开** → 调度器线程启动，按 `config/notify.yaml` 的 `schedule` 在

@@ -80,7 +80,7 @@ def _ports() -> dict[str, int]:
 SERVICES = {
     "dashboard": {
         "desc": "全部功能（持仓/卖出/诊断/回测）",
-        "module": "dashboard/首页.py",
+        "module": "dashboard/home.py",
         "port_key": "dashboard",
     },
     "scheduler": {

@@ -8,7 +8,7 @@
 
 Run::
 
-    streamlit run quant_trading_system/dashboard/pages/0_今日机会.py
+    streamlit run quant_trading_system/dashboard/pages/0_opportunity.py
 """
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.paths import notify_config
+from quant_trading_system.stock_analysis.app_config import (
+    MARKET_LABELS_UI,
+    enabled_markets,
+    load_app_config,
+)
 from quant_trading_system.stock_analysis import (
     add_all_indicators,
     detect_market,
@@ -46,9 +52,13 @@ apply_theme()
 require_login()
 page_header("今日机会", "每日投资决策 · V2", "Opportunity")
 
-ACCOUNT = 100_000  # 默认账户资金（元）
-MARKETS = ["CN", "HK", "US"]
-MARKET_LABELS = {"CN": "🇨🇳 A股", "HK": "🇭🇰 港股", "US": "🇺🇸 美股"}
+_app_cfg = load_app_config(notify_config())
+_opp_cfg = _app_cfg.get("opportunity") or {}
+ACCOUNT = float(_opp_cfg.get("account_equity") or 100_000)
+DEFAULT_TOP_N = int(_opp_cfg.get("max_stocks") or 30)
+SCAN_WORKERS = int(_opp_cfg.get("workers") or 5)
+MARKETS = enabled_markets(_app_cfg)
+MARKET_LABELS = {m: MARKET_LABELS_UI.get(m, m) for m in MARKETS}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -84,7 +94,10 @@ if regime is not None:
     if breadth is not None:
         c2.metric("市场宽度", f"涨 {breadth.advance} / 跌 {breadth.decline}", f"宽度分 {breadth.score:.0f}")
     c3.metric("市场风险", risk.level if risk else "LOW", f"分 {risk.score:.0f}")
-st.caption("市场状态为 A 股（上证指数）视角；港股/美股机会按中性市场环境评估。")
+st.caption(
+    "市场状态为 A 股（上证指数）视角；港股/美股机会按中性市场环境评估。"
+    "监测市场请到左侧 **settings** 页勾选。"
+)
 
 st.divider()
 
@@ -96,17 +109,24 @@ st.subheader("🎯 今日推荐")
 c1, c2 = st.columns([2, 1])
 account = c1.number_input(
     "账户资金（元）",
-    value=ACCOUNT,
-    step=10_000,
+    value=float(ACCOUNT),
+    step=10_000.0,
     key="rec_account",
     help="用于计算建议仓位（不影响评分与入场/止损/目标）",
 )
-top_n = c2.number_input("每市场候选数", value=30, min_value=5, max_value=80, step=5, key="rec_topn")
+top_n = c2.number_input(
+    "每市场候选数",
+    value=max(5, min(80, DEFAULT_TOP_N)),
+    min_value=5,
+    max_value=80,
+    step=5,
+    key="rec_topn",
+)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _scan_market(market: str, top_n: int, account_eq: float,
-                 regime_score: float | None, market_factor: float):
+                 regime_score: float | None, market_factor: float, workers: int):
     """单市场：全市场初筛 → 批量机会引擎（缓存 10 分钟）。返回 (cands, res)。"""
     from quant_trading_system.stock_analysis.screener import screen_candidates
     from quant_trading_system.stock_analysis.sector import fetch_sector_rank, get_stock_sectors
@@ -131,24 +151,26 @@ def _scan_market(market: str, top_n: int, account_eq: float,
             sector_rank=sector_rank,
         )
         # HK 用 akshare（非线程安全）→ 并发降到 2
-        workers = {"CN": 5, "US": 5, "HK": 2}.get(market, 5)
-        scanner = OpportunityBatchScanner(engine=eng, workers=workers)
+        n_workers = 2 if market == "HK" else max(1, int(workers))
+        scanner = OpportunityBatchScanner(engine=eng, workers=n_workers)
         return cands, scanner.scan(cands, market=market)
     except Exception:  # noqa: BLE001
         return [], None
 
 
 scan_res: dict = {}
-prog = st.progress(0.0, text="正在扫描 0/3 市场...")
+n_mkt = max(len(MARKETS), 1)
+prog = st.progress(0.0, text=f"正在扫描 0/{n_mkt} 市场...")
 for i, m in enumerate(MARKETS):
-    prog.progress(i / 3, text=f"正在扫描 {i + 1}/3 市场：{MARKET_LABELS[m]}（初筛 + 机会引擎）...")
-    with st.spinner(f"⏳ 正在扫描 {i + 1}/3 市场：{MARKET_LABELS[m]}（约 10-20 秒，首次较慢）..."):
+    prog.progress(i / n_mkt, text=f"正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（初筛 + 机会引擎）...")
+    with st.spinner(f"⏳ 正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（约 10-20 秒，首次较慢）..."):
         scan_res[m] = _scan_market(
             m, int(top_n), account,
             regime.score if regime else None,
             regime.factor if regime else 1.0,
+            SCAN_WORKERS,
         )
-    prog.progress((i + 1) / 3, text=f"已完成 {MARKET_LABELS[m]}")
+    prog.progress((i + 1) / n_mkt, text=f"已完成 {MARKET_LABELS[m]}")
 prog.empty()
 
 # 汇总 caption
@@ -410,7 +432,7 @@ if has_rec and sel_code:
 
         st.markdown("#### 🤖 AI 解读")
         try:
-            cfg = load_yaml(str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml"))
+            cfg = load_yaml(notify_config())
         except Exception:  # noqa: BLE001
             cfg = None
         with st.spinner("AI 解读中..."):

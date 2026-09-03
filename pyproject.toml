@@ -46,10 +46,12 @@ packages = [
   "quant_trading_system",
   "quant_trading_system.dashboard",
   "quant_trading_system.stock_analysis",
+  "quant_trading_system.stock_analysis.opportunity",
+  "quant_trading_system.stock_analysis.market",
+  "quant_trading_system.stock_analysis.ai",
+  "quant_trading_system.stock_analysis.backtest",
+  "quant_trading_system.stock_analysis.scoring",
   "quant_trading_system.utils",
-  "quant_trading_system.config",
-  "quant_trading_system.examples",
-  "quant_trading_system.deploy",
 ]
 
 # The repository root *is* the package directory named quant_trading_system.
@@ -60,6 +62,9 @@ packages = [
 
 [tool.setuptools.package-dir]
 "quant_trading_system" = "."
+
+[tool.setuptools.package-data]
+"quant_trading_system.dashboard" = ["*.py", "pages/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

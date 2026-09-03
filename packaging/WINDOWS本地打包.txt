@@ -1,0 +1,19 @@
+在 Windows 上本地打包 GP助手（不经过 GitHub）
+==============================================
+
+1. 安装 Python 3.10+（勾选 Add python.exe to PATH）
+   https://www.python.org/downloads/windows/
+
+2. 把本目录解压到例如 D:\gp\quant_trading_system
+
+3. 双击 packaging\build-windows.bat
+   首次约 5–15 分钟（下载依赖 + PyInstaller）
+
+4. 产物：
+   dist\GPAssistant\GPAssistant.exe     ← 双击应出现原生窗口，不要打开 Chrome
+   dist\GP-Assistant-Windows.zip        ← 可以拷给别人
+
+说明：打包完成后请确认 bat 窗口出现 helper: auto-python-20260903a，
+且不要用旧的 20260902 目录里的 exe 测试。
+本包含配置页（settings）。
+旧包会误开 Chrome 访问 localhost:3000（看板实际在 8502）。

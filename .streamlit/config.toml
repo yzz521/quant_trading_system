@@ -1,3 +1,6 @@
+[global]
+developmentMode = false
+
 [theme]
 base = "dark"
 primaryColor = "#00e5ff"
@@ -8,6 +11,8 @@ font = "sans serif"
 
 [server]
 headless = true
+address = "127.0.0.1"
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false

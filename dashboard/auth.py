@@ -24,15 +24,16 @@ from typing import Optional
 import streamlit as st
 import yaml
 
+from quant_trading_system.dashboard.paths import users_config
+
 _PKG = Path(__file__).resolve().parents[1]
-_DEFAULT_USERS = _PKG / "config" / "users.yaml"
 _COOKIE_NAME = "qts_auth"
 _QUERY_KEY = "qts_auth"
 _DEFAULT_TTL_HOURS = 168  # 7 days
 
 
 def _load_cfg(path: Optional[Path] = None) -> dict:
-    p = path or _DEFAULT_USERS
+    p = path or users_config()
     if not p.exists():
         return {"enabled": False, "users": []}
     try:

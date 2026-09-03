@@ -23,6 +23,7 @@ import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.paths import holdings_config, notify_config
 from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
 from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.sell_zone import analyze_positions
@@ -35,8 +36,8 @@ page_header("持仓指挥台", "资金约束 · 本地账本 · 卖出区间与�
 MARKETS = ["CN", "US", "HK"]
 
 # 兼容旧路径：Holdings 内部会自动切换到同目录的 holdings.db
-HOLDINGS_CFG = str(Path(__file__).resolve().parents[2] / "config" / "holdings.yaml")
-NOTIFY_CFG = str(Path(__file__).resolve().parents[2] / "config" / "notify.yaml")
+HOLDINGS_CFG = holdings_config()
+NOTIFY_CFG = notify_config()
 
 
 def get_holdings() -> Holdings:

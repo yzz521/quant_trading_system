@@ -17,7 +17,8 @@
 | 🎯 **今日计划** | 全市场初筛（A股5542/港股/美股7000+）→ 板块轮动 → 9 因子评分 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态调节仓位 | 看板「今日机会」页、`examples/run_opportunity.py` |
 | 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步 | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
 | 🎯 **卖出/加仓参考** | 卖出一二档、止损、深套分批路径、加仓参考 | 看板持仓页、每日邮件区块 |
-| 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | `examples/run_scheduler.py` |
+| 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | 看板「配置」页开关邮件、`examples/run_scheduler.py` |
+| ⚙️ **配置** | 是否发邮件、收件地址、监测 A股/港股/美股、扫描与调度参数（写入 `config/notify.yaml`） | 看板「配置」页（侧栏 `settings`） |
 
 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）。量化负责计算、AI 负责解释、回测负责验证、**你做最终决策**。
 
@@ -61,7 +62,7 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.6 && git push origin v0.3.6
+git tag v0.3.7 && git push origin v0.3.7
 # → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 
@@ -101,14 +102,14 @@ pip install akshare streamlit
 ./deploy/restart.sh status     # 查看运行状态与最近日志
 ```
 
-- 看板：http://localhost:8502（「今日机会」+「持仓与卖出区间」两页）
+- 看板：http://localhost:8502（「今日机会」+「持仓与卖出区间」+「配置」）
 - 调度器：launchd `com.gp.stock-scheduler`，交易日开盘时段定时推送邮件
 - 其他平台：`python deploy/ctl.py dashboard start` / `python deploy/ctl.py scheduler start`
 
 ### 3. 运行测试与示例
 
 ```bash
-pytest -q                          # 120 项测试
+pytest -q                          # 147 项测试
 ruff check stock_analysis dashboard utils examples
 
 # 单票交易计划（联网，默认 600000）
@@ -132,14 +133,16 @@ python examples/gen_email_preview.py
 
 ## 每日邮件（定时推送）
 
-1. 复制并编辑推送配置（**不要**提交真实密钥）：
+1. 复制并编辑推送配置（**不要**提交真实密钥），或直接在看板「配置」页填写：
 
 ```bash
 cp config/notify.yaml.example config/notify.yaml
-# 打开 notify.email.enabled，填写 SMTP 授权码与收件人
+# 看板「配置」页可开关发信、填写邮箱、勾选监测市场（A股/港股/美股）
+# 也可手改 notify.yaml：notify.email.enabled + SMTP 授权码与收件人
 # opportunity.enabled=true 后，邮件将包含「今日机会 · 交易计划」区块
 #   index_symbol: 市场状态参考指数（sh000001 上证 / sh000300 沪深300）
 #   max_stocks: 全市场初筛候选上限 / account_equity / workers / min_opportunity_score
+# enabled_markets: 监测并推送的市场，缺省仅 A股
 ```
 
 2. 测试一发（可指定市场，不依赖是否开盘）：
@@ -179,12 +182,15 @@ quant_trading_system/
 │   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级 + 成长因子）
 │   ├── indicators.py        # 技术指标（MA/MACD/RSI/KDJ/BOLL/ATR 等）
 │   ├── notifier.py          # 邮件/Server酱/飞书推送
-│   └── scheduler.py         # 交易时段调度器
-├── dashboard/               # Streamlit：首页 + 今日机会 + 持仓与卖出区间
+│   ├── scheduler.py         # 交易时段调度器
+│   └── app_config.py        # 看板配置页读写 notify.yaml
+├── dashboard/               # Streamlit：首页 + 今日机会 + 持仓 + 配置
+│   └── pages/               # 0_opportunity / 1_holdings / 2_settings（ASCII 文件名）
+├── app/                     # 桌面应用壳（pywebview + PyInstaller）
 ├── deploy/                  # restart.sh / ctl.py（跨平台管理）
 ├── examples/                # 7 个冒烟脚本
 ├── config/                  # notify.yaml.example、holdings.yaml（勿提交真实密钥）
-├── tests/                   # 120 项测试
+├── tests/                   # 147 项测试
 └── docs/
 ```
 
@@ -194,7 +200,7 @@ quant_trading_system/
 
 | 文件 | 说明 |
 |------|------|
-| `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证（SMTP/Server酱/飞书/ai） |
+| `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证；也可在看板「配置」页保存（SMTP/Server酱/飞书/ai/监测市场） |
 | `config/holdings.yaml` / `.db` | 持仓配置与 SQLite 数据（本地） |
 | `config/users.yaml` | 看板登录（不存在时自动放行） |
 

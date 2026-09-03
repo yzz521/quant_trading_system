@@ -24,6 +24,10 @@ results/
 
 # ---- PyInstaller 打包产物 ----
 build/
+dist/
+output/
+.venv-win/
+.python-for-build.txt
 
 # ---- 个人敏感配置（本地保留，切勿提交）----
 config/notify.yaml

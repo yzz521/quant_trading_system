@@ -10,7 +10,7 @@ except Exception:  # noqa: BLE001
     pass
 
 from .calendar import get_trading_days, is_trading_day, next_trading_day
-from .helpers import ensure_dir, load_json, load_yaml, pct_change, safe_round
+from .helpers import deep_merge, ensure_dir, load_json, load_yaml, pct_change, safe_round, save_yaml
 from .logger import add_file_handler, get_logger, set_log_level
 
 __all__ = [
@@ -18,6 +18,8 @@ __all__ = [
     "set_log_level",
     "add_file_handler",
     "load_yaml",
+    "save_yaml",
+    "deep_merge",
     "load_json",
     "ensure_dir",
     "safe_round",

@@ -16,6 +16,33 @@ def load_yaml(path: str | Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def save_yaml(path: str | Path, data: dict) -> Path:
+    """Write a dict as UTF-8 YAML (keys keep insertion order)."""
+    import yaml  # type: ignore
+
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    return p
+
+
+def deep_merge(base: dict, updates: dict) -> dict:
+    """Recursively merge ``updates`` into ``base`` (mutates and returns ``base``)."""
+    for key, val in updates.items():
+        if isinstance(val, dict) and isinstance(base.get(key), dict):
+            deep_merge(base[key], val)
+        else:
+            base[key] = val
+    return base
+
+
 def load_json(path: str | Path) -> Any:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)

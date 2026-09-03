@@ -16,7 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..utils import get_logger, load_yaml
+from ..utils import get_logger
+from .app_config import enabled_markets, load_app_config
 from .holdings import Holdings
 from .holdings_action import analyze_holding_actions
 from .notifier import Notifier, build_market_message
@@ -35,22 +36,26 @@ class MarketScheduler:
     """按市场交易时段定时执行「每日决策」分析并推送邮件。"""
 
     def __init__(self, config_path: str = "config/notify.yaml") -> None:
-        self.cfg = load_yaml(config_path) or {}
+        self.config_path = config_path
+        holdings_path = str(Path(config_path).parent / "holdings.yaml")
+        self.holdings = Holdings(holdings_path)
+        self.reload()
+
+    def reload(self) -> None:
+        """Re-read notify.yaml so 配置页保存后下一轮调度即可生效。"""
+        self.cfg = load_app_config(self.config_path)
         self.stock_pools = self.cfg.get("stock_pools", {})
         sched = self.cfg.get("schedule", {})
         self.cn_interval = int(sched.get("cn_interval_min", 60)) * 60
         self.ushk_interval = int(sched.get("ushk_interval_min", 10)) * 60
         self.us_winter = bool(sched.get("us_winter", True))
         self.poll_interval = int(sched.get("poll_interval_sec", 60))
-        # V2 今日机会批量扫描（每日邮件中的交易计划区块）
         self.opportunity_cfg = self.cfg.get("opportunity", {})
-        # 启用的市场：只推送这些市场的分析，默认全部（CN/HK/US）
-        raw_markets = self.cfg.get("enabled_markets") or ["CN", "HK", "US"]
-        self.enabled_markets = [m.upper() for m in raw_markets
-                                if str(m).upper() in ("CN", "HK", "US")]
-        self.notifier = Notifier(config_path)
-        holdings_path = str(Path(config_path).parent / "holdings.yaml")
-        self.holdings = Holdings(holdings_path)
+        self.enabled_markets = enabled_markets(self.cfg)
+        notify = self.cfg.get("notify")
+        if notify != getattr(self, "_notify_snapshot", object()):
+            self.notifier = Notifier(self.config_path)
+            self._notify_snapshot = notify
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -203,6 +208,7 @@ class MarketScheduler:
     # ------------------------------------------------------------------ #
     def run_once(self, market: Optional[str] = None) -> None:
         """Fire one cycle for every open market (or a specific one)."""
+        self.reload()
         if market:
             self._run_market(market)
             return
@@ -224,6 +230,7 @@ class MarketScheduler:
         last = {"CN": 0.0, "HK": 0.0, "US": 0.0}
         try:
             while True:
+                self.reload()
                 now_ts = time.time()
                 now = self._now_beijing()
                 intervals = {"CN": self.cn_interval, "HK": self.ushk_interval, "US": self.ushk_interval}
