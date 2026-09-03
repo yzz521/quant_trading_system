@@ -57,6 +57,7 @@ GP助手.app            # macOS（旁有 首次打开.command）
 写进该数据目录下的 `notify.yaml`，与定时推送共用同一份配置。
 预计投入金额以持仓「总资金」为准；打包版可在配置页点「检查更新」，从 GitHub Releases
 下载对应安装包并替换程序文件（`config/` 与 `results/` 保留）。
+若 GitHub API 限流，检查更新会自动改走 Releases 页面，不必填 token。
 
 ## 定时推送并入应用
 

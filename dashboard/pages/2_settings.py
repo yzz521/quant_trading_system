@@ -36,7 +36,9 @@ cfg = load_app_config(CFG_PATH)
 st.caption(f"配置文件：`{CFG_PATH}`（保存后「今日机会」刷新即可；定时邮件下一轮生效，不必重启应用）")
 
 st.subheader("应用更新")
-st.caption(f"当前版本 **v{APP_VERSION}**")
+st.caption(
+    f"当前版本 **v{APP_VERSION}** · [GitHub Releases]({GITHUB_RELEASES_PAGE})"
+)
 if st.button("检查更新", key="chk_upd"):
     try:
         st.session_state["upd_info"] = check_latest()

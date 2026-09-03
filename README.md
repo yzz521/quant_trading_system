@@ -62,7 +62,7 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.11 && git push origin v0.3.11
+git tag v0.3.12 && git push origin v0.3.12
 # → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 

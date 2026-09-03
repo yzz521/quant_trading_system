@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -20,7 +22,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .app_meta import APP_VERSION, GITHUB_RELEASES_API
+from .app_meta import (
+    APP_VERSION,
+    GITHUB_RELEASES_API,
+    GITHUB_RELEASES_ATOM,
+    GITHUB_RELEASES_LATEST,
+    GITHUB_RELEASES_PAGE,
+    GITHUB_REPO,
+)
 
 ProgressCb = Optional[Callable[[float, str], None]]
 
@@ -92,25 +101,150 @@ def bundle_root() -> Path:
     return exe.parent if is_frozen() else install_dir()
 
 
-def check_latest(timeout: int = 20) -> UpdateInfo:
+_TAG_IN_URL = re.compile(r"/releases/tag/(v?[\w.-]+)")
+
+
+def _ssl_context():
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _user_agent() -> str:
+    return f"yzz521-GPAssistant/{APP_VERSION}"
+
+
+def _github_token() -> str:
+    for key in ("QTS_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _api_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": _user_agent(),
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = _github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _web_headers() -> dict[str, str]:
+    return {"User-Agent": _user_agent(), "Accept": "text/html,application/atom+xml,application/xml;q=0.9,*/*;q=0.8"}
+
+
+def _urlopen(req, timeout: int):
+    import urllib.request
+
+    ctx = _ssl_context()
+    if ctx is not None:
+        return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _http_error_text(exc) -> str:
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", "replace")[:400]
+    except Exception:  # noqa: BLE001
+        body = ""
+    remaining = ""
+    try:
+        remaining = str(exc.headers.get("X-RateLimit-Remaining") or "")
+    except Exception:  # noqa: BLE001
+        remaining = ""
+    msg = ""
+    try:
+        msg = str(json.loads(body).get("message") or "")
+    except Exception:  # noqa: BLE001
+        msg = body.strip()
+    rate_limited = remaining == "0" or "rate limit" in msg.lower()
+    if exc.code in (403, 429) and rate_limited:
+        return f"GitHub API 限流（HTTP {exc.code}）"
+    if msg:
+        return f"GitHub 返回 HTTP {exc.code}：{msg[:120]}"
+    return f"GitHub 返回 HTTP {exc.code}"
+
+
+def latest_tag_from_url(url: str) -> str:
+    m = _TAG_IN_URL.search(str(url or ""))
+    if not m:
+        raise ValueError(f"无法从地址解析版本: {url}")
+    return m.group(1).rstrip("/")
+
+
+def parse_latest_from_atom(xml: str) -> str:
+    m = _TAG_IN_URL.search(xml or "")
+    if not m:
+        raise ValueError("GitHub Releases 订阅里没有版本号")
+    return m.group(1).rstrip("/")
+
+
+def release_info_from_tag(tag: str, *, notes: str = "", html_url: str = "") -> UpdateInfo:
+    tag = str(tag or "").strip()
+    asset = expected_asset_name()
+    page = html_url or f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}"
+    return UpdateInfo(
+        current=APP_VERSION,
+        latest=tag,
+        newer=bool(tag) and is_newer(tag, APP_VERSION),
+        notes=notes,
+        asset_name=asset,
+        asset_url=f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{asset}",
+        asset_size=0,
+        html_url=page,
+    )
+
+
+def _check_via_api(timeout: int) -> UpdateInfo:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        GITHUB_RELEASES_API,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": f"GPAssistant/{APP_VERSION}",
-        },
-    )
+    req = urllib.request.Request(GITHUB_RELEASES_API, headers=_api_headers())
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"GitHub 返回 HTTP {e.code}") from e
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"检查更新失败: {e}") from e
+        raise RuntimeError(_http_error_text(e)) from e
     return parse_release(data, current=APP_VERSION)
+
+
+def _check_via_html(timeout: int) -> UpdateInfo:
+    import urllib.request
+
+    req = urllib.request.Request(GITHUB_RELEASES_LATEST, headers=_web_headers())
+    with _urlopen(req, timeout) as resp:
+        tag = latest_tag_from_url(resp.geturl())
+    return release_info_from_tag(tag)
+
+
+def _check_via_atom(timeout: int) -> UpdateInfo:
+    import urllib.request
+
+    req = urllib.request.Request(GITHUB_RELEASES_ATOM, headers=_web_headers())
+    with _urlopen(req, timeout) as resp:
+        xml = resp.read().decode("utf-8", "replace")
+    return release_info_from_tag(parse_latest_from_atom(xml))
+
+
+def check_latest(timeout: int = 20) -> UpdateInfo:
+    """查询最新 Release。API 限流/失败时改走 GitHub 页面或 atom 订阅。"""
+    last: Exception | None = None
+    for fn in (_check_via_api, _check_via_html, _check_via_atom):
+        try:
+            return fn(timeout)
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(
+        f"检查更新失败：{last}。可打开 {GITHUB_RELEASES_PAGE} 手动下载。"
+    ) from last
 
 
 def parse_release(data: dict[str, Any], current: str = APP_VERSION) -> UpdateInfo:
@@ -126,6 +260,8 @@ def parse_release(data: dict[str, Any], current: str = APP_VERSION) -> UpdateInf
             url = str(asset.get("browser_download_url") or "")
             size = int(asset.get("size") or 0)
             break
+    if not url and tag:
+        url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{want}"
     return UpdateInfo(
         current=current,
         latest=tag,
@@ -134,7 +270,9 @@ def parse_release(data: dict[str, Any], current: str = APP_VERSION) -> UpdateInf
         asset_name=want,
         asset_url=url,
         asset_size=size,
-        html_url=str(data.get("html_url") or ""),
+        html_url=str(data.get("html_url") or (
+            f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}" if tag else ""
+        )),
     )
 
 
@@ -142,11 +280,8 @@ def download_asset(url: str, dest: Path, progress: ProgressCb = None, timeout: i
     import urllib.request
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": f"GPAssistant/{APP_VERSION}"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+    req = urllib.request.Request(url, headers=_web_headers())
+    with _urlopen(req, timeout) as resp, open(dest, "wb") as out:
         total = int(resp.headers.get("Content-Length") or 0)
         got = 0
         while True:
