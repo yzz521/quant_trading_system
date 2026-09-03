@@ -24,8 +24,17 @@ def normalize_component(v: Optional[float], lo: float, hi: float, invert: bool =
     return float(np.clip(r * 100, 0, 100))
 
 
+def _last_num(d: pd.DataFrame, col: str) -> Optional[float]:
+    if col not in d.columns:
+        return None
+    v = pd.to_numeric(d[col], errors="coerce").iloc[-1]
+    if v is None or np.isnan(v):
+        return None
+    return float(v)
+
+
 def score_trend(df: pd.DataFrame) -> float:
-    """趋势健康度：MA 多头排列 + 现价与 MA20 相对位置 + MA20 斜率。"""
+    """趋势健康度：MA 结构为主，MACD 方向与 ADX 强度为确认（避免再叠一层振荡指标）。"""
     if df is None or len(df) < 20:
         return 50.0
     d = df.tail(60).reset_index(drop=True)
@@ -62,6 +71,28 @@ def score_trend(df: pd.DataFrame) -> float:
     # MA20 斜率（近 10 日）
     slope = (m20 - float(ma20.iloc[-10])) / float(ma20.iloc[-10]) * 100 if len(ma20) >= 10 else 0
     score += float(np.clip(slope * 5, -15, 15))
+
+    # MACD：与均线同向才加分，反向对冲（金叉/死叉确认，不另开因子）
+    dif = _last_num(d, "macd_dif")
+    dea = _last_num(d, "macd_dea")
+    hist = _last_num(d, "macd_hist")
+    if dif is not None and dea is not None:
+        macd_bull = dif > dea and (hist is None or hist >= 0)
+        macd_bear = dif < dea and (hist is None or hist <= 0)
+        if macd_bull:
+            score += 8
+        elif macd_bear:
+            score -= 8
+
+    # ADX：有趋势才信任均线方向；无趋势（震荡市）打折
+    adx = _last_num(d, "adx")
+    plus_di = _last_num(d, "plus_di")
+    minus_di = _last_num(d, "minus_di")
+    if adx is not None:
+        if adx >= 25 and plus_di is not None and minus_di is not None:
+            score += 10 if plus_di > minus_di else -10
+        elif adx < 15:
+            score -= 8
 
     return float(np.clip(score, 0, 100))
 

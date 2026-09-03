@@ -167,6 +167,11 @@ class TestOpportunityEngine:
         assert res.plan.invalidate_condition  # 应有失效条件
         d = res.to_dict()
         assert d["plan"]["code"] == "600000"
+        assert "technical" in res.plan.meta
+        assert res.plan.meta["technical"]["grade"] in ("S", "A", "B", "C")
+        assert 0 <= res.opportunity_score.components["similar_pattern"] <= 100
+        if res.sr and res.sr.evidence:
+            assert "fibonacci" in res.sr.evidence
 
     def test_short_df_returns_empty(self):
         df = _kline(n=20)

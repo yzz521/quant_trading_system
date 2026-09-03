@@ -113,6 +113,16 @@ class TestOpportunityScore:
         os_ = calc_opportunity_score(_kline(), current_price=11.5, entry_low=11, entry_high=12)
         assert sum(b["weight"] for b in os_.breakdown.values()) == pytest.approx(1.0)
 
+    def test_similar_pattern_default_neutral(self):
+        os_ = calc_opportunity_score(_kline(), current_price=11.5, entry_low=11, entry_high=12)
+        assert os_.components["similar_pattern"] == pytest.approx(50.0)
+
+    def test_similar_pattern_uses_provided_score(self):
+        os_ = calc_opportunity_score(
+            _kline(), current_price=11.5, entry_low=11, entry_high=12, similar_pattern_score=80,
+        )
+        assert os_.components["similar_pattern"] == pytest.approx(80.0)
+
 
 class TestComponents:
     def test_rr_scoring(self):

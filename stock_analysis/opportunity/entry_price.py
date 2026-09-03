@@ -93,6 +93,12 @@ def calc_entry_zone(
         bases.append((boll_mid, "BOLL中轨"))
     if prev_low:
         bases.append((prev_low, "近期低点"))
+    if sr and isinstance(sr.evidence, dict):
+        fib = sr.evidence.get("fibonacci") or {}
+        for key, label in (("fib_618", "斐波那契61.8%"), ("fib_500", "斐波那契50%"), ("fib_382", "斐波那契38.2%")):
+            v = _num(fib.get(key))
+            if v and v < cur:
+                bases.append((v, label))
 
     if not bases:
         # 无下方参考时，用 ATR 估算回调空间

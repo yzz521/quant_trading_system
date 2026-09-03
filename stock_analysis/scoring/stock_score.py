@@ -158,11 +158,23 @@ def _score_risk(df: pd.DataFrame, news_risks: Optional[list] = None) -> float:
                 from_high = (hi - cur) / hi
                 if from_high > 0.15:
                     s -= 15
-        # 超买（RSI6 > 80）
+        # 超买：RSI / KDJ / CCI 只作风险过滤，不另开评分因子（彼此高度相关）
         if "rsi6" in d.columns:
             rsi = pd.to_numeric(d["rsi6"], errors="coerce").iloc[-1]
             if rsi is not None and not np.isnan(rsi) and rsi > 80:
                 s -= 10
+        if "j" in d.columns:
+            j = pd.to_numeric(d["j"], errors="coerce").iloc[-1]
+            if j is not None and not np.isnan(j) and j > 100:
+                s -= 6
+        if "cci" in d.columns:
+            cci = pd.to_numeric(d["cci"], errors="coerce").iloc[-1]
+            if cci is not None and not np.isnan(cci) and cci > 200:
+                s -= 6
+        if "wr" in d.columns:
+            wr = pd.to_numeric(d["wr"], errors="coerce").iloc[-1]
+            if wr is not None and not np.isnan(wr) and wr > -20:
+                s -= 4
     news_risks = news_risks or []
     if news_risks:
         s -= min(30, len(news_risks) * 8)

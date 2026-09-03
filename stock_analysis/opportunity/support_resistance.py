@@ -14,6 +14,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from ..indicators import fibonacci_retracement
+
 
 @dataclass
 class SupportResistance:
@@ -76,6 +78,7 @@ def detect_support_resistance(
     close = pd.to_numeric(d["close"], errors="coerce").astype(float)
     high = pd.to_numeric(d["high"], errors="coerce").astype(float)
     low = pd.to_numeric(d["low"], errors="coerce").astype(float)
+    evidence: dict = {}
 
     # 1) 摆动高低点
     swing_highs: list[float] = []
@@ -89,13 +92,26 @@ def detect_support_resistance(
         if low.iloc[i] == win_lo.min():
             swing_lows.append(float(low.iloc[i]))
 
-    # 2) 均线（MA20/MA60）作为动态支撑/阻力
+    # 2) 均线作为动态支撑/阻力
     ma_ev: list[tuple[float, str]] = []
-    for col, name in (("ma20", "MA20"), ("ma60", "MA60")):
+    for col, name in (("ma20", "MA20"), ("ma60", "MA60"), ("ma120", "MA120"), ("ma250", "MA250")):
         if col in d.columns:
             v = pd.to_numeric(d[col], errors="coerce").iloc[-1]
             if v is not None and not np.isnan(v):
                 ma_ev.append((float(v), name))
+
+    # 2b) 斐波那契回撤（近 lookback 摆动高低点）
+    fib = fibonacci_retracement(high, low, lookback=min(lookback, len(d)))
+    fib_ev: list[tuple[float, str]] = []
+    for key, name in (
+        ("fib_382", "斐波那契38.2%"),
+        ("fib_500", "斐波那契50%"),
+        ("fib_618", "斐波那契61.8%"),
+    ):
+        if key in fib:
+            fib_ev.append((float(fib[key]), name))
+    if fib:
+        evidence["fibonacci"] = {k: fib[k] for k in fib if k.startswith("fib_")}
 
     # 3) 布林轨道
     boll_ev: list[tuple[float, str]] = []
@@ -106,20 +122,20 @@ def detect_support_resistance(
                 boll_ev.append((float(v), name))
 
     cur = float(close.iloc[-1])
-    evidence: dict = {}
+    level_ev = ma_ev + boll_ev + fib_ev
 
-    # 支撑候选：摆动低点 + 低于现价的均线/布林
+    # 支撑候选：摆动低点 + 低于现价的均线/布林/斐波那契
     sup_points = list(swing_lows)
-    for v, name in ma_ev + boll_ev:
+    for v, _name in level_ev:
         if v < cur:
             sup_points.append(v)
     supports = _cluster_levels([p for p in sup_points if p < cur * 1.02], tol_pct)
     # 只保留现价下方、且相距至少 0.3% 的支撑
     supports = [s for s in supports if s < cur * 0.997]
 
-    # 阻力候选：摆动高点 + 高于现价的均线/布林 + 前高
+    # 阻力候选：摆动高点 + 高于现价的均线/布林/斐波那契 + 前高
     res_points = list(swing_highs)
-    for v, name in ma_ev + boll_ev:
+    for v, _name in level_ev:
         if v > cur:
             res_points.append(v)
     resistances = _cluster_levels([p for p in res_points if p > cur * 0.98], tol_pct)
@@ -147,7 +163,7 @@ def detect_support_resistance(
         src = []
         if key_support in swing_lows:
             src.append("摆动低点")
-        for v, name in ma_ev + boll_ev:
+        for v, name in level_ev:
             if abs(v - key_support) / cur * 100 < 1.0:
                 src.append(name)
         evidence["key_support"] = {"level": round(key_support, 2), "sources": src or ["聚类支撑"]}
@@ -155,7 +171,7 @@ def detect_support_resistance(
         src = []
         if key_resistance in swing_highs:
             src.append("摆动高点")
-        for v, name in ma_ev + boll_ev:
+        for v, name in level_ev:
             if abs(v - key_resistance) / cur * 100 < 1.0:
                 src.append(name)
         evidence["key_resistance"] = {"level": round(key_resistance, 2), "sources": src or ["聚类阻力"]}

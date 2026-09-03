@@ -22,7 +22,7 @@ from typing import Optional
 import pandas as pd
 
 from .data_fetcher import detect_market, fetch_kline
-from .indicators import add_all_indicators
+from .indicators import add_all_indicators, fibonacci_retracement
 
 
 def _f(v) -> Optional[float]:
@@ -88,6 +88,10 @@ def analyze_sell_zone(position: dict, days: int = 250,
                          ("120日高点", high120), ("布林上轨", boll_upper)):
             if v is not None:
                 levels[label] = v
+        fib = fibonacci_retracement(df["high"], df["low"], lookback=min(60, len(df)))
+        for key, label in (("fib_382", "斐波那契38.2%"), ("fib_618", "斐波那契61.8%")):
+            if key in fib:
+                levels[label] = fib[key]
 
         seen: dict[float, list[str]] = {}
         for label, v in levels.items():

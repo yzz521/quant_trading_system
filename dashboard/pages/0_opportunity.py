@@ -413,6 +413,14 @@ if has_rec and sel_code:
         m3.metric("置信度", f"{p.confidence:.0%}")
         m4.metric("建议仓位", f"{p.position_percent:.1f}%" if p.position_percent is not None else "—")
 
+        tech = (p.meta or {}).get("technical") or {}
+        if tech.get("grade"):
+            tags = " · ".join(tech.get("tags") or [])
+            st.caption(f"技术面 **{tech['grade']}** 级（{tech.get('score', '—')}/100）" + (f"　{tags}" if tags else ""))
+        pats = (p.meta or {}).get("patterns") or []
+        if pats:
+            st.caption("K线形态：" + "、".join(pats))
+
         c1, c2, c3 = st.columns(3)
         c1.metric("现价", f"{p.current_price:.2f}")
         c2.metric("入场区间", f"{p.entry_low:.2f} ~ {p.entry_high:.2f}")

@@ -10,6 +10,8 @@ from typing import Optional
 
 import pandas as pd
 
+from ..indicators import rate_signals
+from ..patterns import pattern_score, recent_pattern_names
 from ..scoring.opportunity_score import OpportunityScore, calc_opportunity_score
 from ..scoring.stock_score import StockScore, calc_stock_score
 from .entry_price import EntryPrice, calc_entry_zone
@@ -97,6 +99,11 @@ class OpportunityEngine:
         if df is None or len(df) < 30:
             return OpportunityResult(code=code, name=name)
 
+        if similar_pattern_score is None:
+            similar_pattern_score = pattern_score(df)
+        tech = rate_signals(df)
+        pattern_names = recent_pattern_names(df)
+
         # 1) 支撑/阻力
         sr = detect_support_resistance(df)
 
@@ -158,8 +165,8 @@ class OpportunityEngine:
         confidence = round(confidence, 2)
 
         # 8) 理由/风险/失效条件
-        reasons = self._build_reasons(sr, entry, exit_, rr, opportunity_score)
-        risks = self._build_risks(df, sr, exit_, news_risks)
+        reasons = self._build_reasons(sr, entry, exit_, rr, opportunity_score, tech, pattern_names)
+        risks = self._build_risks(df, sr, exit_, news_risks, pattern_names)
         invalidate = (
             f"收盘跌破 {exit_.stop_loss}（止损位）即视为逻辑失效"
             if exit_.stop_loss else ""
@@ -184,6 +191,11 @@ class OpportunityEngine:
         if stock_sector:
             plan.meta["sector"] = stock_sector
             plan.meta["sector_score"] = round(sector_score or 50.0, 1)
+        plan.meta["technical"] = tech
+        if pattern_names:
+            plan.meta["patterns"] = pattern_names
+        if sr and sr.evidence.get("fibonacci"):
+            plan.meta["fibonacci"] = sr.evidence["fibonacci"]
 
         return OpportunityResult(
             code=code,
@@ -206,8 +218,16 @@ class OpportunityEngine:
         exit_: ExitPrice,
         rr: RiskReward,
         opp: OpportunityScore,
+        tech: Optional[dict] = None,
+        pattern_names: Optional[list[str]] = None,
     ) -> list[str]:
         reasons: list[str] = []
+        if tech and tech.get("grade"):
+            tags = "，".join((tech.get("tags") or [])[:3])
+            extra = f"：{tags}" if tags else ""
+            reasons.append(f"技术面 {tech['grade']} 级{extra}")
+        if pattern_names:
+            reasons.append("K线形态：" + "、".join(pattern_names[:3]))
         if sr and sr.key_support is not None:
             reasons.append(f"关键支撑位于 {sr.key_support}，为下方安全边际")
         if entry and entry.standard is not None:
@@ -218,7 +238,7 @@ class OpportunityEngine:
             reasons.append(f"风险收益比 1:{rr.ratio_1}（{rr.grade}）")
         if opp and opp.total:
             reasons.append(f"机会评分 {round(opp.total, 1)}/100")
-        return reasons[:5]
+        return reasons[:6]
 
     def _build_risks(
         self,
@@ -226,14 +246,33 @@ class OpportunityEngine:
         sr: SupportResistance,
         exit_: ExitPrice,
         news_risks: Optional[list] = None,
+        pattern_names: Optional[list[str]] = None,
     ) -> list[str]:
         risks: list[str] = []
         if exit_ and exit_.stop_loss is not None:
             risks.append(f"若跌破止损 {exit_.stop_loss} 需离场")
         if df is not None and len(df) >= 20:
-            rsi = pd.to_numeric(df["rsi6"], errors="coerce").iloc[-1]
+            last = df.iloc[-1]
+            rsi = pd.to_numeric(df["rsi6"], errors="coerce").iloc[-1] if "rsi6" in df.columns else None
             if rsi is not None and not pd.isna(rsi) and rsi > 75:
                 risks.append(f"RSI6={rsi:.0f} 短期超买，警惕回踩")
+            j = last["j"] if "j" in df.columns else None
+            try:
+                jv = float(j) if j is not None else None
+            except (TypeError, ValueError):
+                jv = None
+            if jv is not None and not pd.isna(jv) and jv > 100:
+                risks.append(f"KDJ.J={jv:.0f} 超买")
+            width = last["boll_width"] if "boll_width" in df.columns else None
+            try:
+                wv = float(width) if width is not None else None
+            except (TypeError, ValueError):
+                wv = None
+            if wv is not None and not pd.isna(wv) and 0 < wv < 0.04:
+                risks.append("布林带宽挤压，变盘临近")
+        bearish = [n for n in (pattern_names or []) if n in ("射击之星", "看跌吞没", "暮星", "三黑鸦", "大阴线")]
+        if bearish:
+            risks.append("出现" + "、".join(bearish) + "，注意见顶回撤")
         if news_risks:
             risks.append(f"近期新闻命中 {len(news_risks)} 条风险关键词")
         return risks[:4]
