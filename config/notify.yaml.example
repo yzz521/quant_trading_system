@@ -12,6 +12,10 @@ stock_pools:
 # 看板「配置」页可勾选；缺省仅 A股
 enabled_markets: ["CN"]
 
+# 持仓量化：每个交易日对现有持仓跑一次机会引擎+信息面，按「已持有」给出
+# 卖出/减仓/持有/可加仓（不当时机票）。与下方 opportunity.enabled 无关；
+# 当天后续小时推送复用 results/holdings_quant.json。历史回测不会在调度里跑。
+
 # 今日机会：全市场初筛（A股/港股/美股）→ 机会引擎 → 交易计划，随每日邮件推送
 opportunity:
   enabled: false            # 开启后每日邮件将包含「今日机会 · 交易计划」区块

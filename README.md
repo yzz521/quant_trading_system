@@ -15,9 +15,9 @@
 | 功能 | 说明 | 入口 |
 |------|------|------|
 | 🎯 **今日计划** | 全市场初筛（A股5542/港股/美股7000+）→ 板块轮动 → 9 因子评分 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态调节仓位。**未设置预计投入金额时不扫描** | 看板「今日机会」页、`examples/run_opportunity.py` |
-| 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步 | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
+| 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步、持仓量化（卖出/减仓/持有/可加仓） | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
 | 🎯 **卖出/加仓参考** | 卖出一二档、止损、深套分批路径、加仓参考 | 看板持仓页、每日邮件区块 |
-| 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | 看板「配置」页开关邮件、`examples/run_scheduler.py` |
+| 📧 **每日邮件** | 持仓 + 资金账户 + **持仓量化（每个交易日一次）** + 今日机会 + 卖出/加仓参考，交易日自动推送 | 看板「配置」页开关邮件、`examples/run_scheduler.py` |
 | ⚙️ **配置** | 是否发邮件、收件地址、监测 A股/港股/美股、扫描参数；打包版可检查并安装 GitHub 新版本 | 看板「配置」页（侧栏 `settings`） |
 
 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）。量化负责计算、AI 负责解释、回测负责验证、**你做最终决策**。
@@ -62,7 +62,7 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.10 && git push origin v0.3.10
+git tag v0.3.11 && git push origin v0.3.11
 # → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 
@@ -159,7 +159,7 @@ python examples/run_scheduler.py --test --market CN
 python deploy/ctl.py scheduler start
 ```
 
-推送内容四区块：**💼 我的持仓 → 💰 资金账户 → 🎯 今日机会 · 交易计划 → 🎯 持仓卖出/加仓参考**。日志：`results/scheduler.log`。
+推送内容五区块：**💼 我的持仓 → 💰 资金账户 → 📐 持仓量化（每个交易日一次）→ 🎯 今日机会 · 交易计划 → 🎯 持仓卖出/加仓参考**。日志：`results/scheduler.log`。
 
 ---
 
@@ -176,6 +176,7 @@ quant_trading_system/
 │   ├── screener.py          # 全市场初筛器（A股/港股/美股）
 │   ├── sector.py            # 板块轮动（新浪 49 行业强度 + 成分映射）
 │   ├── holdings.py          # 我的持仓（SQLite）
+│   ├── holdings_quant.py    # 持仓量化（已持有解读：卖出/减仓/持有/可加仓）
 │   ├── sell_zone.py         # 卖出区间（含深套分批路径）
 │   ├── holdings_action.py   # 卖出/加仓参考
 │   ├── trade_monitor.py     # 粘贴成交解析 + 同步持仓（parser + apply_trade）

@@ -2,6 +2,7 @@
 
 每个开市时段跑一轮「每日决策」分析并推送邮件：
 * 我的持仓盈亏 + 卖出/加仓参考
+* 持仓量化（每个交易日一次：技术面+信息面，按已持有解读）
 * 资金账户快照
 * 今日机会（V2 批量交易计划，可选）
 
@@ -94,13 +95,67 @@ class MarketScheduler:
         now = self._now_beijing()
         return {m: self._in_session(m, now) for m in ("CN", "HK", "US")}
 
+    def _holdings_quant_for_market(
+        self,
+        market: str,
+        holdings: list,
+        holding_actions: Optional[list],
+        *,
+        force: bool,
+    ) -> Optional[list]:
+        """每个交易日对持仓跑一轮机会引擎+信息面；当日后续推送复用缓存。"""
+        from .holdings_quant import analyze_holdings_quant, cached_items, save_market_cache, session_date
+
+        today = session_date()
+        if not force:
+            hit = cached_items(market, today)
+            if hit is not None:
+                log.info("[%s] 持仓量化使用今日缓存 %d 只", market, len(hit))
+                return hit
+        zones = {}
+        for a in holding_actions or []:
+            code = a.get("code")
+            if code and not a.get("error"):
+                zones[str(code)] = a
+        sector_rank, sector_map = [], {}
+        regime_score = None
+        if market == "CN":
+            try:
+                from .sector import fetch_sector_rank, get_stock_sectors
+
+                sector_rank = fetch_sector_rank("CN")
+                sector_map = get_stock_sectors()
+            except Exception as e:  # noqa: BLE001
+                log.debug("[%s] 持仓量化板块信息不可用: %s", market, e)
+        try:
+            from .market import fetch_market_context
+
+            idx = str((self.opportunity_cfg or {}).get("index_symbol") or "sh000001")
+            mkt = fetch_market_context(idx)
+            regime = mkt.get("regime") if mkt else None
+            regime_score = regime.score if regime else None
+        except Exception as e:  # noqa: BLE001
+            log.debug("[%s] 持仓量化市场状态不可用: %s", market, e)
+        try:
+            items = analyze_holdings_quant(
+                holdings,
+                fetch_news=True,
+                zones=zones,
+                regime_score=regime_score,
+                sector_map=sector_map,
+                sector_rank=sector_rank,
+            )
+            save_market_cache(market, today, items)
+            log.info("[%s] 持仓量化完成 %d 只", market, len(items))
+            return items
+        except Exception as e:  # noqa: BLE001
+            log.warning("[%s] 持仓量化失败: %s", market, e)
+            return cached_items(market, today)
+
     # ------------------------------------------------------------------ #
-    def _run_market(self, market: str) -> None:
-        pool = self.stock_pools.get(market, [])
-        if not pool:
-            log.info("[%s] 股票池为空，跳过", market)
-            return
-        log.info("[%s] 开始每日决策分析（%d 只候选）...", market, len(pool))
+    def _run_market(self, market: str, *, force_holdings_quant: bool = False) -> None:
+        pool = self.stock_pools.get(market, []) or []
+        log.info("[%s] 开始每日决策分析（回退池 %d 只）...", market, len(pool))
 
         # ---- 我的持仓盈亏 + 卖出/加仓参考 ----
         holdings, h_summary = [], None
@@ -109,14 +164,23 @@ class MarketScheduler:
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] 持仓盈亏计算失败: %s", market, e)
 
+        if not pool and not holdings:
+            log.info("[%s] 无回退股票池且无持仓，跳过", market)
+            return
+
         holding_actions = None
         if holdings:
             try:
-                # compute_pnl 行已含 code/cost/quantity/current_price
                 holding_actions = analyze_holding_actions(holdings)
                 log.info("[%s] 持仓动作分析 %d 只", market, len(holding_actions))
             except Exception as e:  # noqa: BLE001
                 log.warning("[%s] 持仓动作分析失败: %s", market, e)
+
+        holding_quant = None
+        if holdings:
+            holding_quant = self._holdings_quant_for_market(
+                market, holdings, holding_actions, force=force_holdings_quant,
+            )
 
         # ---- 资金账户快照 ----
         capital_snapshot = None
@@ -204,6 +268,7 @@ class MarketScheduler:
             market,
             holdings=holdings or None, holdings_summary=h_summary,
             capital_snapshot=capital_snapshot,
+            holding_quant=holding_quant,
             holding_actions=holding_actions,
             trading_plans=trading_plans,
         )
@@ -215,7 +280,7 @@ class MarketScheduler:
         """Fire one cycle for every open market (or a specific one)."""
         self.reload()
         if market:
-            self._run_market(market)
+            self._run_market(market, force_holdings_quant=True)
             return
         status = self.session_status()
         for m, open_ in status.items():
@@ -223,7 +288,7 @@ class MarketScheduler:
                 log.info("[%s] 未启用，跳过", m)
                 continue
             if open_:
-                self._run_market(m)
+                self._run_market(m, force_holdings_quant=True)
             else:
                 log.info("[%s] 非交易时段，跳过", m)
 

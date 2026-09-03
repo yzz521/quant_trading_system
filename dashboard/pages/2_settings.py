@@ -163,6 +163,7 @@ min_score = float(o5.number_input("机会分下限（0=不过滤）", value=floa
 index_symbol = st.text_input("市场状态参考指数", value=str(opp_cfg.get("index_symbol") or "sh000001"), help="上证 sh000001；沪深300 sh000300")
 
 # --------------------------------------------------------------------------- #
+st.caption("持仓量化每个交易日自动计算一次并写入邮件，与「今日机会」开关无关；历史回测不会定时跑。")
 st.subheader("调度频率")
 sc1, sc2, sc3 = st.columns(3)
 cn_interval = int(sc1.number_input("A股间隔（分钟）", value=int(sched_cfg.get("cn_interval_min") or 60), min_value=5, max_value=240, step=5))

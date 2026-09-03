@@ -80,6 +80,19 @@ class TestBuildMarketMessage:
         assert "AVOID" in text
         assert "仓位" not in text
 
+    def test_holdings_quant_block(self):
+        items = [{
+            "code": "600000", "name": "浦发", "action": "HOLD", "action_label": "持有",
+            "action_emoji": "🟡", "current_price": 11.0, "pnl_pct": 10.0,
+            "stock_score": 70, "opportunity_score": 65, "tech_grade": "A",
+            "info_grade": "中性", "stop_loss": 10.2, "note": "持有观察",
+        }]
+        _, text, html = build_market_message("CN", holding_quant=items)
+        assert "持仓量化" in html
+        assert "持仓量化" in text
+        assert "持有" in text
+        assert "600000" in html
+
     def test_holdings_and_actions_blocks(self):
         """持仓 + 卖出/加仓参考区块仍渲染（main-v3 核心）。"""
         holdings = [

@@ -48,6 +48,29 @@ def _actions(market: str) -> list:
     return [{"code": "00700", "name": "腾讯控股", "action": "持有", "note": "量价健康", "pnl_pct": 20.5}]
 
 
+def _quant(market: str) -> list:
+    if market == "CN":
+        return [
+            {"code": "600000", "name": "浦发银行", "action": "HOLD", "action_label": "持有",
+             "action_emoji": "🟡", "current_price": 9.28, "pnl_pct": 9.18, "stock_score": 71,
+             "opportunity_score": 66, "tech_grade": "A", "info_grade": "中性",
+             "stop_loss": 8.70, "note": "持有观察"},
+            {"code": "600519", "name": "贵州茅台", "action": "ADD", "action_label": "可加仓",
+             "action_emoji": "🟢", "current_price": 1680.50, "pnl_pct": -3.97, "stock_score": 78,
+             "opportunity_score": 70, "tech_grade": "A", "info_grade": "中性",
+             "stop_loss": 1580.0, "note": "趋势仍在且回踩入场区，可观察加仓"},
+        ]
+    if market == "US":
+        return [{"code": "AAPL", "name": "Apple", "action": "HOLD", "action_label": "持有",
+                 "action_emoji": "🟡", "current_price": 338.19, "pnl_pct": 82.81, "stock_score": 80,
+                 "opportunity_score": 62, "tech_grade": "S", "info_grade": "中性",
+                 "stop_loss": 290.0, "note": "已有浮盈：持有、不加仓追高"}]
+    return [{"code": "00700", "name": "腾讯控股", "action": "HOLD", "action_label": "持有",
+             "action_emoji": "🟡", "current_price": 385.60, "pnl_pct": 20.5, "stock_score": 74,
+             "opportunity_score": 68, "tech_grade": "A", "info_grade": "中性",
+             "stop_loss": 350.0, "note": "持有观察"}]
+
+
 def _plans(market: str) -> list:
     base = {
         "stock_score": 72.0, "opportunity_score": 78.0, "current_price": 12.36,
@@ -71,6 +94,7 @@ for market in ("CN", "US", "HK"):
         market,
         holdings=holdings, holdings_summary=summary,
         holding_actions=_actions(market),
+        holding_quant=_quant(market),
         trading_plans=_plans(market),
     )
     out = f"results/email_{market.lower()}_preview.html"

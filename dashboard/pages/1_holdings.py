@@ -26,6 +26,13 @@ from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.dashboard.paths import holdings_config, notify_config
 from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
 from quant_trading_system.stock_analysis.holdings import Holdings
+from quant_trading_system.stock_analysis.holdings_action import analyze_holding_actions
+from quant_trading_system.stock_analysis.holdings_quant import (
+    analyze_holdings_quant,
+    cached_items,
+    save_market_cache,
+    session_date,
+)
 from quant_trading_system.stock_analysis.sell_zone import analyze_positions
 from quant_trading_system.stock_analysis.trade_monitor import TradeMonitor
 
@@ -134,6 +141,59 @@ with tab_overview:
             df = pd.DataFrame(positions)
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.caption(f"共 {len(positions)} 条持仓")
+
+        st.markdown("**📐 今日持仓量化**")
+        st.caption("按已持有解读（卖出/减仓/持有/可加仓）。调度器每个交易日自动跑一次并写入邮件；此处可立即刷新。不跑历史回测。")
+        today = session_date()
+        if "holdings_quant" not in st.session_state:
+            codes = {str(p.get("code")) for p in positions}
+            merged = []
+            for m in MARKETS:
+                hit = cached_items(m, today)
+                if hit:
+                    merged.extend([x for x in hit if str(x.get("code")) in codes])
+            if merged:
+                st.session_state["holdings_quant"] = merged
+        if st.button("刷新持仓量化", key="run_holdings_quant"):
+            with st.spinner("正在分析持仓（K线 + 技术面 + 信息面）..."):
+                try:
+                    rows_q = positions
+                    try:
+                        rows_q, _ = _holder.compute_pnl()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    zones = {}
+                    try:
+                        for a in analyze_holding_actions(rows_q):
+                            if a.get("code") and not a.get("error"):
+                                zones[str(a["code"])] = a
+                    except Exception:  # noqa: BLE001
+                        zones = {}
+                    items = analyze_holdings_quant(rows_q, fetch_news=True, zones=zones)
+                    st.session_state["holdings_quant"] = items
+                    by_m: dict[str, list] = {}
+                    for a in items:
+                        by_m.setdefault(str(a.get("market") or "CN"), []).append(a)
+                    for m, rows in by_m.items():
+                        save_market_cache(m, today, rows)
+                except Exception as e:  # noqa: BLE001
+                    st.error(str(e))
+        items = st.session_state.get("holdings_quant")
+        if items:
+            qrows = []
+            for a in items:
+                qrows.append({
+                    "动作": f"{a.get('action_emoji','')} {a.get('action_label')}",
+                    "代码": a.get("code"),
+                    "名称": a.get("name"),
+                    "现价": a.get("current_price"),
+                    "盈亏%": a.get("pnl_pct"),
+                    "个股/机会": f"{a.get('stock_score')}/{a.get('opportunity_score')}",
+                    "技术/信息": f"{a.get('tech_grade')} / {a.get('info_grade')}",
+                    "止损": a.get("stop_loss"),
+                    "说明": a.get("note") or a.get("error") or "",
+                })
+            st.dataframe(pd.DataFrame(qrows), use_container_width=True, hide_index=True)
 
 # =========================== 粘贴成交 =========================== #
 with tab_paste:

@@ -37,7 +37,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     st.markdown('<div class="qts-card"><div class="badge">DAILY</div><h3>今日机会</h3><p>市场状态 + 交易计划（评分/入场区间/止损/目标/风险收益比/仓位）+ AI 解读 + 历史回测 + 批量扫描。</p></div>', unsafe_allow_html=True)
 with c2:
-    st.markdown('<div class="qts-card"><div class="badge">HOLDINGS</div><h3>持仓与卖出区间</h3><p>维护持仓、卖出/加仓参考、资金账户、粘贴成交同步。</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="qts-card"><div class="badge">HOLDINGS</div><h3>持仓与卖出区间</h3><p>维护持仓、卖出/加仓参考、持仓量化（卖出/减仓/持有/可加仓）、资金账户、粘贴成交同步。</p></div>', unsafe_allow_html=True)
 with c3:
     st.markdown('<div class="qts-card"><div class="badge">SETTINGS</div><h3>配置</h3><p>是否发邮件、收件地址、监测 A股/港股/美股、扫描与调度参数。</p></div>', unsafe_allow_html=True)
 

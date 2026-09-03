@@ -148,10 +148,11 @@ def build_market_message(
     holdings: Optional[list] = None,
     holdings_summary: Optional[dict] = None,
     capital_snapshot: Optional[dict] = None,
+    holding_quant: Optional[list] = None,
     holding_actions: Optional[list] = None,
     trading_plans: Optional[list] = None,
 ) -> tuple[str, str, str]:
-    """构建每日决策邮件（main-v3 精简版：持仓 / 资金 / 今日机会 / 卖出加仓参考）。"""
+    """构建每日决策邮件（持仓 / 资金 / 持仓量化 / 今日机会 / 卖出加仓参考）。"""
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
     title = f"GP助手 · {mname} {now}"
@@ -198,6 +199,13 @@ def build_market_message(
             f"<p style='color:#6b7280;font-size:12px'>可用=总资金−持仓成本（忽略浮盈，偏保守）。"
             f"满仓时「可买」常为空属正常。</p>",
         ))
+
+    # --- holdings quant (once per session day; already-held interpretation) ---
+    if holding_quant:
+        from .holdings_quant import quant_to_html, quant_to_text
+        text_parts.append(quant_to_text(holding_quant))
+        text_parts.append("")
+        html_parts.append(_html_section("📐 持仓量化", quant_to_html(holding_quant)))
 
     # --- V2 trading plans (今日机会) ---
     if trading_plans:
