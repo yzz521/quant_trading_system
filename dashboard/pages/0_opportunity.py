@@ -163,6 +163,7 @@ def _scan_market(market: str, top_n: int, account_eq: float,
             market_factor=market_factor,
             sector_map=sector_map,
             sector_rank=sector_rank,
+            fetch_news=True,
         )
         # HK 用 akshare（非线程安全）→ 并发降到 2
         n_workers = 2 if market == "HK" else max(1, int(workers))
@@ -378,6 +379,7 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
         market_factor=market_factor,
         sector_map=sector_map,
         sector_rank=sector_rank,
+        fetch_news=True,
     )
     plan_res = engine.analyze(code, name, df, extra=extra)
     if plan_res.plan is None:
@@ -417,6 +419,14 @@ if has_rec and sel_code:
         if tech.get("grade"):
             tags = " · ".join(tech.get("tags") or [])
             st.caption(f"技术面 **{tech['grade']}** 级（{tech.get('score', '—')}/100）" + (f"　{tags}" if tags else ""))
+        info = (p.meta or {}).get("information") or {}
+        if info.get("grade") and info.get("grade") != "中性":
+            tags = " · ".join(info.get("tags") or [])
+            st.caption(f"信息面 **{info['grade']}**（{info.get('score', '—')}/100）" + (f"　{tags}" if tags else ""))
+        if info.get("severe"):
+            st.warning("近两周公告/新闻命中重大风险关键词（立案/调查/处罚等），评分已降权，请先读原文再决策。")
+        for h in (info.get("headlines") or [])[:3]:
+            st.markdown(f"- {h}")
         pats = (p.meta or {}).get("patterns") or []
         if pats:
             st.caption("K线形态：" + "、".join(pats))
@@ -504,6 +514,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
                     account_equity=ACCOUNT,
                     regime_score=regime.score if regime else None,
                     market_factor=regime.factor if regime else 1.0,
+                    fetch_news=True,
                 )
                 scanner = OpportunityBatchScanner(engine=eng, workers=5)
                 custom_res = scanner.scan(codes)

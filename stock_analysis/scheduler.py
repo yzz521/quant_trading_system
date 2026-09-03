@@ -184,6 +184,7 @@ class MarketScheduler:
                         market_factor=regime.factor if regime else 1.0,
                         sector_map=sector_map,
                         sector_rank=sector_rank,
+                        fetch_news=True,
                     )
                     scanner = OpportunityBatchScanner(
                         engine=engine,

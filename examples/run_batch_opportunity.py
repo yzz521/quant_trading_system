@@ -37,7 +37,7 @@ def main() -> None:
         print("用法: python examples/run_batch_opportunity.py 600000 000001 [--codes 'a,b']")
         return
 
-    engine = OpportunityEngine(account_equity=args.account)
+    engine = OpportunityEngine(account_equity=args.account, fetch_news=True)
     scanner = OpportunityBatchScanner(
         engine=engine,
         workers=args.workers,

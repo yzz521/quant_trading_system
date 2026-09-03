@@ -116,6 +116,7 @@ hiddenimports += [
     "quant_trading_system.stock_analysis.data_fetcher",
     "quant_trading_system.stock_analysis.indicators",
     "quant_trading_system.stock_analysis.patterns",
+    "quant_trading_system.stock_analysis.news",
     "quant_trading_system.utils",
     "quant_trading_system.utils.logger",
     "quant_trading_system.utils.helpers",

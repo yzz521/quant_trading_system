@@ -72,6 +72,7 @@ def main() -> None:
         account_equity=args.account,
         regime_score=regime.score,
         market_factor=regime.factor,
+        fetch_news=not args.synthetic,
     )
     res = engine.analyze(args.code, name, df)
 

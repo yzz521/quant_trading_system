@@ -65,6 +65,7 @@ class OpportunityEngine:
         regime_score: Optional[float] = None,
         sector_map: Optional[dict] = None,
         sector_rank: Optional[list] = None,
+        fetch_news: bool = False,
     ) -> None:
         self.account_equity = account_equity
         self.risk_percent = risk_percent
@@ -74,6 +75,8 @@ class OpportunityEngine:
         # Sector Rotation：{code6: 板块名} + 板块强度排名（可为 None，失败中性 50）
         self.sector_map = sector_map or {}
         self.sector_rank = sector_rank or []
+        # 仅实时扫描开启。回测必须保持 False，否则会把「今天的公告」套到历史K线上。
+        self.fetch_news = fetch_news
 
     def analyze(
         self,
@@ -83,6 +86,7 @@ class OpportunityEngine:
         *,
         extra: Optional[dict] = None,
         news_risks: Optional[list] = None,
+        news_catalysts: Optional[list] = None,
         similar_pattern_score: Optional[float] = None,
     ) -> OpportunityResult:
         """对单票执行完整机会分析。
@@ -92,12 +96,26 @@ class OpportunityEngine:
             name: 股票名称。
             df: 已加指标的日K（至少 60 根）。
             extra: 外部数据（市值/PE/主力净流入等，供 Stock Score）。
-            news_risks: 新闻风险条目。
+            news_risks: 新闻风险条目；None 且 fetch_news=True 时自动拉取。
+            news_catalysts: 利好条目；与 news_risks 一同由信息面生成。
             similar_pattern_score: 历史相似形态分。
         """
         extra = extra or {}
         if df is None or len(df) < 30:
             return OpportunityResult(code=code, name=name)
+
+        info_snap = None
+        if news_risks is None and self.fetch_news:
+            try:
+                from ..news import fetch_and_rate
+
+                info_snap = fetch_and_rate(code, name)
+                news_risks = info_snap.risks
+                news_catalysts = info_snap.catalysts
+            except Exception:  # noqa: BLE001
+                news_risks, news_catalysts = [], []
+        news_risks = news_risks or []
+        news_catalysts = news_catalysts or []
 
         if similar_pattern_score is None:
             similar_pattern_score = pattern_score(df)
@@ -132,6 +150,7 @@ class OpportunityEngine:
         stock_score = calc_stock_score(
             df, extra=extra, regime_score=self.regime_score,
             sector_score=sector_score, news_risks=news_risks,
+            news_catalysts=news_catalysts,
         )
         opportunity_score = calc_opportunity_score(
             df,
@@ -162,10 +181,14 @@ class OpportunityEngine:
         confidence = 0.0
         if opportunity_score.total and rr.ratio_1:
             confidence = min(0.98, (opportunity_score.total / 100) * 0.6 + min(rr.ratio_1, 4.0) / 4.0 * 0.4)
+        if info_snap and info_snap.severe:
+            confidence = min(confidence, confidence * 0.75)
         confidence = round(confidence, 2)
 
         # 8) 理由/风险/失效条件
-        reasons = self._build_reasons(sr, entry, exit_, rr, opportunity_score, tech, pattern_names)
+        reasons = self._build_reasons(
+            sr, entry, exit_, rr, opportunity_score, tech, pattern_names, info_snap,
+        )
         risks = self._build_risks(df, sr, exit_, news_risks, pattern_names)
         invalidate = (
             f"收盘跌破 {exit_.stop_loss}（止损位）即视为逻辑失效"
@@ -196,6 +219,8 @@ class OpportunityEngine:
             plan.meta["patterns"] = pattern_names
         if sr and sr.evidence.get("fibonacci"):
             plan.meta["fibonacci"] = sr.evidence["fibonacci"]
+        if info_snap is not None:
+            plan.meta["information"] = info_snap.to_dict()
 
         return OpportunityResult(
             code=code,
@@ -220,12 +245,17 @@ class OpportunityEngine:
         opp: OpportunityScore,
         tech: Optional[dict] = None,
         pattern_names: Optional[list[str]] = None,
+        info_snap=None,
     ) -> list[str]:
         reasons: list[str] = []
         if tech and tech.get("grade"):
             tags = "，".join((tech.get("tags") or [])[:3])
             extra = f"：{tags}" if tags else ""
             reasons.append(f"技术面 {tech['grade']} 级{extra}")
+        if info_snap is not None and (info_snap.tags or info_snap.grade != "中性"):
+            tags = "，".join((info_snap.tags or [])[:3])
+            extra = f"：{tags}" if tags else ""
+            reasons.append(f"信息面{info_snap.grade}{extra}")
         if pattern_names:
             reasons.append("K线形态：" + "、".join(pattern_names[:3]))
         if sr and sr.key_support is not None:
@@ -274,5 +304,13 @@ class OpportunityEngine:
         if bearish:
             risks.append("出现" + "、".join(bearish) + "，注意见顶回撤")
         if news_risks:
-            risks.append(f"近期新闻命中 {len(news_risks)} 条风险关键词")
+            titles = []
+            for it in news_risks[:2]:
+                t = it.get("title") if isinstance(it, dict) else str(it)
+                if t:
+                    titles.append(str(t)[:36])
+            if titles:
+                risks.append("公告/新闻风险：" + "；".join(titles))
+            else:
+                risks.append(f"近期新闻命中 {len(news_risks)} 条风险关键词")
         return risks[:4]

@@ -144,8 +144,29 @@ def _score_sector(sector_score: Optional[float]) -> float:
     return float(np.clip(sector_score if sector_score is not None else 50, 0, 100))
 
 
-def _score_risk(df: pd.DataFrame, news_risks: Optional[list] = None) -> float:
-    """风险维度：技术风险（高位/超买）+ 新闻风险关键词。分数越高 = 风险越低（越安全）。"""
+def _unique_news_keys(items: Optional[list]) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for it in items or []:
+        if isinstance(it, dict):
+            k = str(it.get("keyword") or it.get("title") or "").strip()
+        else:
+            k = str(it).strip()
+        if k and k not in seen:
+            seen.add(k)
+            keys.append(k)
+    return keys
+
+
+def _score_risk(
+    df: pd.DataFrame,
+    news_risks: Optional[list] = None,
+    news_catalysts: Optional[list] = None,
+) -> float:
+    """风险维度：技术风险（高位/超买）+ 信息面（公告/新闻，一类关键词一票）。
+
+    分数越高 = 越安全。无新闻时不改分（与未接入信息面时行为一致）。
+    """
     s = 80.0
     if df is not None and len(df) > 0:
         d = df.tail(20).reset_index(drop=True)
@@ -175,9 +196,17 @@ def _score_risk(df: pd.DataFrame, news_risks: Optional[list] = None) -> float:
             wr = pd.to_numeric(d["wr"], errors="coerce").iloc[-1]
             if wr is not None and not np.isnan(wr) and wr > -20:
                 s -= 4
-    news_risks = news_risks or []
-    if news_risks:
-        s -= min(30, len(news_risks) * 8)
+    risk_keys = _unique_news_keys(news_risks)
+    if risk_keys:
+        s -= min(30, len(risk_keys) * 8)
+        if any(
+            (it.get("severity") == "severe") if isinstance(it, dict) else False
+            for it in (news_risks or [])
+        ):
+            s -= 8
+    cat_keys = _unique_news_keys(news_catalysts)
+    if cat_keys:
+        s += min(15, len(cat_keys) * 5)
     return float(np.clip(s, 0, 100))
 
 
@@ -188,6 +217,7 @@ def calc_stock_score(
     regime_score: Optional[float] = None,
     sector_score: Optional[float] = None,
     news_risks: Optional[list] = None,
+    news_catalysts: Optional[list] = None,
     weights: Optional[dict] = None,
 ) -> StockScore:
     """计算个股质量评分（9 因子）。
@@ -197,7 +227,8 @@ def calc_stock_score(
         extra: 外部数据（市值/PE/换手/主力净流入/营收净利同比/金额/ROE 等）。
         regime_score: 市场环境分（0-100）。
         sector_score: 板块强度分（0-100，Sector Rotation 环节）。
-        news_risks: 新闻风险列表（命中关键词的条目）。
+        news_risks: 新闻/公告风险条目（按关键词去重后计入 risk，不另开因子）。
+        news_catalysts: 利好催化剂条目（同一 risk 票里小幅加分，与风险对冲）。
         weights: 自定义权重（默认 9 因子权重）。
     """
     w = {**WEIGHTS, **(weights or {})}
@@ -212,7 +243,7 @@ def calc_stock_score(
         "valuation": _score_valuation(df, extra),
         "market_env": _score_market_env(regime_score),
         "sector": _score_sector(sector_score),
-        "risk": _score_risk(df, news_risks),
+        "risk": _score_risk(df, news_risks, news_catalysts),
     }
     total = sum(comps[k] * w[k] for k in w)
     breakdown = {k: {"weight": round(w[k], 3), "score": round(comps[k], 1)} for k in w}

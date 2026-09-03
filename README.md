@@ -40,7 +40,7 @@ Top N 候选（默认 30，可调 5~80）
 
 - **初筛**（`screener.py`）：全市场快照一次拉取，不拉 K 线秒级完成。A股/港股按成交额过滤；美股用 nasdaq 官方 API（市值≥100亿美元），失败回退知名池
 - **板块轮动**（`sector.py`）：新浪 49 行业强度 + 全市场成分映射（24h 缓存），强势板块候选加分；未命中中性 50
-- **9 因子评分**（`scoring/`）：Growth 成长（营收/净利同比，单票详情拉取）、Momentum 动量（20/60日收益+RSI）、Sector 板块强度为 main-v3 新增。技术趋势以均线结构为主，MACD/ADX 做方向与强度确认；RSI/KDJ/CCI/WR 只作超买风险过滤，不另开因子。K 线形态写入机会分的「相似形态」槽（10%）；斐波那契回撤参与支撑/阻力与入场基准
+- **9 因子评分**（`scoring/`）：Growth 成长（营收/净利同比，单票详情拉取）、Momentum 动量（20/60日收益+RSI）、Sector 板块强度为 main-v3 新增。技术趋势以均线结构为主，MACD/ADX 做方向与强度确认；RSI/KDJ/CCI/WR 只作超买风险过滤，不另开因子。K 线形态写入机会分的「相似形态」槽（10%）；斐波那契回撤参与支撑/阻力与入场基准。信息面（近 14 日公告+新闻关键词）并入 **risk 20%** 同一票：减持/立案等降分、回购/中标等小幅加分；回测默认不拉新闻，避免把今日公告套到历史K线
 - **决策**：RR<1.5 → AVOID 过滤；其余按机会分排序展示，看板分「买入列表/关注列表」双 tab
 
 ---
@@ -62,7 +62,7 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.9 && git push origin v0.3.9
+git tag v0.3.10 && git push origin v0.3.10
 # → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 
@@ -182,6 +182,7 @@ quant_trading_system/
 │   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级 + 成长因子）
 │   ├── indicators.py        # 技术指标（MA/MACD/RSI/KDJ/BOLL/ATR/ADX/VWAP/斐波那契）
 │   ├── patterns.py          # K线形态（吞没/晨暮星/三兵三鸦等，接入机会分相似形态）
+│   ├── news.py              # 信息面（东财公告+新闻关键词，接入个股分 risk）
 │   ├── notifier.py          # 邮件/Server酱/飞书推送
 │   ├── scheduler.py         # 交易时段调度器
 │   └── app_config.py        # 看板配置页读写 notify.yaml
