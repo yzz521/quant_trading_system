@@ -10,3 +10,15 @@ alwaysApply: true
 - 版本号写在 `utils/app_meta.py` 的 `APP_VERSION`，与 tag 一致（如 `0.3.8` → `v0.3.8`）
 - 提交信息说明为什么发这版；不要提交 `dist/`、`output/`、密钥和 `notify.yaml`
 - 推送后给出 Actions / Releases 链接即可
+
+# 提交作者只能是用户本人
+
+提交的 Author / Committer 使用本机 git 用户（`yzz`），不要把 Cursor 写成作者。
+
+禁止在 commit message 或 PR 里加入：
+
+- `Co-authored-by: Cursor <cursoragent@cursor.com>`
+- `Made-with: Cursor`
+- 任何 `cursoragent@cursor.com` trailer
+
+用 HEREDOC 写完整 message，不要加上述 trailer。
