@@ -118,6 +118,8 @@ hiddenimports += [
     "quant_trading_system.utils.logger",
     "quant_trading_system.utils.helpers",
     "quant_trading_system.utils.calendar",
+    "quant_trading_system.utils.app_meta",
+    "quant_trading_system.utils.updater",
     "certifi",
 ]
 

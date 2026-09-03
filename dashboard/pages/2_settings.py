@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import streamlit as st  # noqa: E402
 from quant_trading_system.dashboard.auth import require_login
+from quant_trading_system.dashboard.capital import planned_capital
 from quant_trading_system.dashboard.paths import notify_config
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.stock_analysis.app_config import (
@@ -23,6 +24,9 @@ from quant_trading_system.stock_analysis.app_config import (
     smtp_preset_name,
 )
 
+from quant_trading_system.utils.app_meta import APP_VERSION, GITHUB_RELEASES_PAGE
+from quant_trading_system.utils.updater import check_latest, apply_and_restart, is_frozen
+
 apply_theme()
 require_login()
 page_header("配置", "邮件推送 · 监测市场 · 扫描与调度参数", "Settings")
@@ -30,6 +34,44 @@ page_header("配置", "邮件推送 · 监测市场 · 扫描与调度参数", "
 CFG_PATH = notify_config()
 cfg = load_app_config(CFG_PATH)
 st.caption(f"配置文件：`{CFG_PATH}`（保存后「今日机会」刷新即可；定时邮件下一轮生效，不必重启应用）")
+
+st.subheader("应用更新")
+st.caption(f"当前版本 **v{APP_VERSION}**")
+if st.button("检查更新", key="chk_upd"):
+    try:
+        st.session_state["upd_info"] = check_latest()
+    except Exception as e:  # noqa: BLE001
+        st.session_state.pop("upd_info", None)
+        st.error(str(e))
+info = st.session_state.get("upd_info")
+if info is not None:
+    if not info.newer:
+        st.success(f"已是最新（{info.latest or ('v' + info.current)}）")
+    else:
+        st.info(f"发现新版本 **{info.latest}**（当前 v{info.current}）")
+        if info.notes:
+            with st.expander("更新说明"):
+                st.markdown(info.notes)
+        if is_frozen() and info.asset_url:
+            if st.button("下载并更新（将重启应用）", type="primary", key="do_upd"):
+                prog = st.progress(0.0, text="准备下载…")
+
+                def _cb(pct: float, msg: str) -> None:
+                    prog.progress(min(max(pct, 0.0), 1.0), text=msg)
+
+                try:
+                    apply_and_restart(info, progress=_cb)
+                except Exception as e:  # noqa: BLE001
+                    st.error(str(e))
+        else:
+            st.markdown(
+                f"请到 [GitHub Releases]({info.html_url or GITHUB_RELEASES_PAGE}) "
+                f"下载 `{info.asset_name}`。"
+            )
+            if not is_frozen():
+                st.caption("当前是开发模式，应用内更新仅对打包后的 exe / app 有效。")
+
+st.divider()
 
 email_cfg = ((cfg.get("notify") or {}).get("email") or {})
 opp_cfg = cfg.get("opportunity") or {}
@@ -107,15 +149,13 @@ else:
 
 # --------------------------------------------------------------------------- #
 st.subheader("今日机会默认参数")
-st.caption("看板「今日机会」页的初始值；也可在该页临时改，不覆盖这里。定时邮件里的机会区块用这里的值。")
-o1, o2, o3 = st.columns(3)
+_hold_cap = planned_capital()
+if _hold_cap > 0:
+    st.caption(f"建议仓位按持仓「总资金」**{_hold_cap:,.0f} 元** 计算。修改请到 holdings 页。")
+else:
+    st.caption("尚未设置预计投入。进入「今日机会」或 holdings 页填写后才会扫描。")
+o1, o3 = st.columns(2)
 opp_enabled = o1.toggle("每日邮件包含今日机会", value=bool(opp_cfg.get("enabled")))
-account_equity = o2.number_input(
-    "账户资金（元）",
-    value=float(opp_cfg.get("account_equity") or 100_000),
-    step=10_000.0,
-    min_value=0.0,
-)
 max_stocks = int(o3.number_input("每市场候选数", value=int(opp_cfg.get("max_stocks") or 30), min_value=5, max_value=80, step=5))
 o4, o5 = st.columns(2)
 workers = int(o4.number_input("扫描并发", value=int(opp_cfg.get("workers") or 5), min_value=1, max_value=8))
@@ -177,7 +217,7 @@ if save_clicked:
                 "notify": {"email": email_payload},
                 "opportunity": {
                     "enabled": bool(opp_enabled),
-                    "account_equity": float(account_equity),
+                    "account_equity": float(planned_capital()),
                     "max_stocks": int(max_stocks),
                     "workers": int(workers),
                     "min_opportunity_score": float(min_score),

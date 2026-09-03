@@ -100,6 +100,8 @@ def test_spec_collects_stock_analysis_modules():
     assert "quant_trading_system.stock_analysis" in spec
     assert "quant_trading_system.stock_analysis.scheduler" in spec
     assert "quant_trading_system.stock_analysis.app_config" in spec
+    assert "quant_trading_system.utils.app_meta" in spec
+    assert "quant_trading_system.utils.updater" in spec
     assert '"akshare"' in spec
     assert "collect_all" in spec
     assert "certifi" in spec

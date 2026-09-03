@@ -83,7 +83,10 @@ with tab_overview:
             step=5.0, key="acct_max_pct",
         )
     if st.button("保存资金设置", key="save_acct"):
-        _holder.set_account(total_capital=float(new_cap), max_position_pct=float(new_pct) / 100.0)
+        from quant_trading_system.dashboard.capital import save_planned_capital
+
+        save_planned_capital(float(new_cap))
+        _holder.set_account(max_position_pct=float(new_pct) / 100.0)
         st.success("已保存")
         st.rerun()
     snap = _holder.capital_snapshot()

@@ -111,6 +111,11 @@ def test_settings_page_exists():
     assert "发送邮件" in src
     assert "启用市场" in src
     assert "save_app_config" in src
+    assert "检查更新" in src
     opp = (page.parent / "0_opportunity.py").read_text(encoding="utf-8")
     assert "enabled_markets" in opp
+    assert "planned_capital" in opp
+    assert "st.stop()" in opp
     assert 'MARKETS = ["CN"]' not in opp
+    assert "step=10_000," not in opp
+    assert "step=10_000.0" in opp

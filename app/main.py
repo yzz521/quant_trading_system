@@ -435,7 +435,7 @@ def _webview_import_hint(exc: BaseException) -> str:
     if "nul" in err or "devnull" in err:
         return (
             "这不是缺 WebView2，而是 Windows 无控制台打包的启动问题。\n"
-            "请改用 v0.3.7 或更新的安装包。"
+            "请改用 v0.3.8 或更新的安装包。"
         )
     if "_ssl" in err or "dll load failed" in err or "找不到指定的模块" in err:
         return (

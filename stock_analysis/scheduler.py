@@ -175,7 +175,11 @@ class MarketScheduler:
                             log.warning("[%s] 板块轮动不可用（用中性）: %s", market, e)
                             sector_rank, sector_map = [], {}
                     engine = OpportunityEngine(
-                        account_equity=float(opp_cfg.get("account_equity", 100_000)),
+                        account_equity=(
+                            float(self.holdings.get_account().get("total_capital") or 0)
+                            or float(opp_cfg.get("account_equity") or 0)
+                            or None
+                        ),
                         regime_score=regime.score if regime else None,
                         market_factor=regime.factor if regime else 1.0,
                         sector_map=sector_map,

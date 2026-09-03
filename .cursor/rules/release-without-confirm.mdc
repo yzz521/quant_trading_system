@@ -1,0 +1,12 @@
+---
+description: 桌面应用发版时直接提交、推送并打 tag 打包，无需再确认
+alwaysApply: true
+---
+
+# 发版不必再确认
+
+用户已授权：功能完成后可直接提交 `main-v3`、推送远程，并打 `v*` 标签触发 GitHub Actions 打包（`build-app` + `release-portable`），不要再询问「要不要推 / 要不要打 tag」。
+
+- 版本号写在 `utils/app_meta.py` 的 `APP_VERSION`，与 tag 一致（如 `0.3.8` → `v0.3.8`）
+- 提交信息说明为什么发这版；不要提交 `dist/`、`output/`、密钥和 `notify.yaml`
+- 推送后给出 Actions / Releases 链接即可

@@ -14,11 +14,11 @@
 
 | 功能 | 说明 | 入口 |
 |------|------|------|
-| 🎯 **今日计划** | 全市场初筛（A股5542/港股/美股7000+）→ 板块轮动 → 9 因子评分 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态调节仓位 | 看板「今日机会」页、`examples/run_opportunity.py` |
+| 🎯 **今日计划** | 全市场初筛（A股5542/港股/美股7000+）→ 板块轮动 → 9 因子评分 → 交易计划（入场区间/止损/三档目标/RR/仓位）→ 历史回测 → AI 解读；真实指数市场状态调节仓位。**未设置预计投入金额时不扫描** | 看板「今日机会」页、`examples/run_opportunity.py` |
 | 💼 **我的持仓** | SQLite 持仓管理（增删改、加权成本）、盈亏计算、粘贴成交自动同步 | 看板「持仓与卖出区间」页、`examples/my_holdings.py` |
 | 🎯 **卖出/加仓参考** | 卖出一二档、止损、深套分批路径、加仓参考 | 看板持仓页、每日邮件区块 |
 | 📧 **每日邮件** | 持仓 + 资金账户 + 今日机会 + 卖出/加仓参考 四区块，交易日自动推送 | 看板「配置」页开关邮件、`examples/run_scheduler.py` |
-| ⚙️ **配置** | 是否发邮件、收件地址、监测 A股/港股/美股、扫描与调度参数（写入 `config/notify.yaml`） | 看板「配置」页（侧栏 `settings`） |
+| ⚙️ **配置** | 是否发邮件、收件地址、监测 A股/港股/美股、扫描参数；打包版可检查并安装 GitHub 新版本 | 看板「配置」页（侧栏 `settings`） |
 
 决策状态：🟢BUY_NOW / 🟢BUY_ON_PULLBACK / 🟡WATCH / 🟠HOLD / 🔴SELL / ⛔AVOID（RR<1.5 即 AVOID，不计算仓位）。量化负责计算、AI 负责解释、回测负责验证、**你做最终决策**。
 
@@ -62,7 +62,7 @@ pyinstaller app/packaging/gp_assistant.spec --noconfirm
 产物自动上传 GitHub **Releases 页直接下载**（无需本地 Python/PyInstaller）：
 
 ```bash
-git tag v0.3.7 && git push origin v0.3.7
+git tag v0.3.8 && git push origin v0.3.8
 # → Releases：GP-Assistant-macOS-arm64/x64.zip、GP-Assistant-Windows.zip、GP-Assistant-Linux.tar.gz
 ```
 

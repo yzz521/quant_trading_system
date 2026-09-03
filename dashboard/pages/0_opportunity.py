@@ -20,8 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
-from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.capital import planned_capital, save_planned_capital
 from quant_trading_system.dashboard.paths import notify_config
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.stock_analysis.app_config import (
     MARKET_LABELS_UI,
     enabled_markets,
@@ -54,7 +55,7 @@ page_header("今日机会", "每日投资决策 · V2", "Opportunity")
 
 _app_cfg = load_app_config(notify_config())
 _opp_cfg = _app_cfg.get("opportunity") or {}
-ACCOUNT = float(_opp_cfg.get("account_equity") or 100_000)
+ACCOUNT = planned_capital()
 DEFAULT_TOP_N = int(_opp_cfg.get("max_stocks") or 30)
 SCAN_WORKERS = int(_opp_cfg.get("workers") or 5)
 MARKETS = enabled_markets(_app_cfg)
@@ -106,15 +107,28 @@ st.divider()
 # 今日推荐（三市场同时扫描）
 # --------------------------------------------------------------------------- #
 st.subheader("🎯 今日推荐")
-c1, c2 = st.columns([2, 1])
-account = c1.number_input(
-    "账户资金（元）",
-    value=float(ACCOUNT),
-    step=10_000.0,
-    key="rec_account",
-    help="用于计算建议仓位（不影响评分与入场/止损/目标）",
-)
-top_n = c2.number_input(
+if ACCOUNT <= 0:
+    st.warning("尚未设置预计投入金额。设置后才会扫描今日机会（用于计算建议仓位）。")
+    setup_cap = st.number_input(
+        "预计投入金额（元）",
+        min_value=0.0,
+        value=100_000.0,
+        step=10_000.0,
+        key="setup_capital",
+        help="写入持仓「资金账户」，下次进入本页会自动读取。",
+    )
+    if st.button("保存并开始扫描", type="primary", key="save_setup_capital"):
+        if float(setup_cap) <= 0:
+            st.error("请填写大于 0 的金额")
+        else:
+            save_planned_capital(float(setup_cap))
+            st.success("已保存，开始扫描…")
+            st.rerun()
+    st.caption("也可到左侧 **holdings** 页「资金账户」中设置。")
+    st.stop()
+
+st.caption(f"仓位按预计投入 **{ACCOUNT:,.0f} 元** 计算（持仓配置）。修改请到 holdings 页。")
+top_n = st.number_input(
     "每市场候选数",
     value=max(5, min(80, DEFAULT_TOP_N)),
     min_value=5,
@@ -165,7 +179,7 @@ for i, m in enumerate(MARKETS):
     prog.progress(i / n_mkt, text=f"正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（初筛 + 机会引擎）...")
     with st.spinner(f"⏳ 正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（约 10-20 秒，首次较慢）..."):
         scan_res[m] = _scan_market(
-            m, int(top_n), account,
+            m, int(top_n), ACCOUNT,
             regime.score if regime else None,
             regime.factor if regime else 1.0,
             SCAN_WORKERS,
@@ -379,7 +393,7 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
 if has_rec and sel_code:
     with st.spinner(f"⏳ 正在深度分析 {sel_code}（K线/估值/资金流/回测）..."):
         detail = _analyze_one(
-            sel_code, sel_name, account,
+            sel_code, sel_name, ACCOUNT,
             regime.score if regime else None,
             regime.factor if regime else 1.0,
         )
@@ -463,14 +477,13 @@ else:
 # 自定义扫描（备用：手动输入任意代码，市场自动识别）
 # --------------------------------------------------------------------------- #
 with st.expander("🛠 自定义扫描（手动输入任意代码）"):
-    bcol1, bcol2, bcol3 = st.columns([2, 1, 1])
+    bcol1, bcol3 = st.columns([3, 1])
     batch_input = bcol1.text_input(
         "候选股票代码（逗号分隔）",
         "600000, 000001, 600519",
         key="custom_codes",
         help="逐个跑机会引擎，输出按机会分排序的交易计划（过滤 AVOID）",
     )
-    custom_account = bcol2.number_input("账户资金（元）", value=account, step=10_000, key="custom_account")
     batch_run = bcol3.button("扫描", type="secondary", use_container_width=True, key="custom_run")
 
     if batch_run:
@@ -480,7 +493,7 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
         else:
             with st.spinner(f"⏳ 正在批量分析 {len(codes)} 只，请稍候..."):
                 eng = OpportunityEngine(
-                    account_equity=custom_account,
+                    account_equity=ACCOUNT,
                     regime_score=regime.score if regime else None,
                     market_factor=regime.factor if regime else 1.0,
                 )

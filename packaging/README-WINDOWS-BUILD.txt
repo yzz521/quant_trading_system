@@ -18,5 +18,5 @@ Build GP Assistant on Windows (do not use macOS)
    If any step fails you get BUILD FAILED — do not ship that dist folder.
    Success: dist\GPAssistant\GPAssistant.exe (keep the whole GPAssistant folder).
 
-This tree includes the v0.3.7 desktop and settings-page fixes.
-Do not test startup bugs with the GitHub v0.3.6 Windows zip.
+This tree includes the v0.3.8 capital-gate and in-app updater.
+Do not test startup bugs with the GitHub v0.3.6 / v0.3.7 Windows zip.

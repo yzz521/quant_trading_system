@@ -17,14 +17,15 @@ st.set_page_config(
 
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.ui_theme import apply_theme
+from quant_trading_system.utils.app_meta import APP_VERSION
 
 apply_theme()
 require_login("GP助手 · 每日决策")
 
 st.markdown(
-    """
+    f"""
 <div class="qts-hero">
-  <div class="brand">GP ASSISTANT · DAILY DECISION</div>
+  <div class="brand">GP ASSISTANT · DAILY DECISION · v{APP_VERSION}</div>
   <h1 style="margin:0;color:#e8f1ff">◈ GP助手 · 每日决策</h1>
   <p style="margin:0.35rem 0 0;color:#8b9bb8">今日机会 · 我的持仓 · 配置</p>
 </div>
@@ -40,4 +41,4 @@ with c2:
 with c3:
     st.markdown('<div class="qts-card"><div class="badge">SETTINGS</div><h3>配置</h3><p>是否发邮件、收件地址、监测 A股/港股/美股、扫描与调度参数。</p></div>', unsafe_allow_html=True)
 
-st.caption("请从左侧进入功能页（opportunity / holdings / settings）。")
+st.caption("请从左侧进入功能页（opportunity / holdings / settings）。应用更新在 settings。")
