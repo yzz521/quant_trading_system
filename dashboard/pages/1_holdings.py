@@ -22,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
-from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
+from quant_trading_system.dashboard.disclaimer import render_disclaimer
 from quant_trading_system.dashboard.paths import holdings_config, notify_config
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
 from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
 from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.holdings_action import analyze_holding_actions
@@ -494,3 +495,5 @@ with tab_delete:
                 _holder.delete(codes)
                 st.success(f"已删除 {len(to_delete)} 条")
                 st.rerun()
+
+render_disclaimer()

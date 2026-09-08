@@ -16,6 +16,7 @@ st.set_page_config(
 )
 
 from quant_trading_system.dashboard.auth import require_login
+from quant_trading_system.dashboard.disclaimer import render_disclaimer
 from quant_trading_system.dashboard.ui_theme import apply_theme
 from quant_trading_system.utils.app_meta import APP_VERSION
 
@@ -42,3 +43,4 @@ with c3:
     st.markdown('<div class="qts-card"><div class="badge">SETTINGS</div><h3>配置</h3><p>是否发邮件、收件地址、监测 A股/港股/美股、扫描与调度参数。</p></div>', unsafe_allow_html=True)
 
 st.caption("请从左侧进入功能页（opportunity / holdings / settings）。应用更新在 settings。")
+render_disclaimer()

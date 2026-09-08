@@ -19,6 +19,7 @@ from typing import Optional
 import pandas as pd
 
 from ..utils import get_logger
+from . import hithink
 
 log = get_logger("DataFetcher")
 
@@ -83,6 +84,12 @@ def fetch_kline(info: MarketInfo, days: int = 250) -> pd.DataFrame:
     start = end - pd.Timedelta(days=days + 60)  # extra for holidays
 
     if info.market == "CN":
+        # A 股优先走同花顺官方源（纯 HTTP、线程安全、服务端前复权），口径与
+        # akshare adjust="qfq" 一致。未配置 Key 或请求失败时回退旧源，
+        # 行为与改动前完全相同。港股 / 美股分支不受影响。
+        cn = hithink.fetch_kline_cn(info, days=days)
+        if cn is not None and not cn.empty:
+            return cn
         _clear_proxy()
         import akshare as ak
         if info.code.startswith(("5", "1")):
@@ -157,17 +164,51 @@ def fetch_fund_flow(info: MarketInfo) -> Optional[pd.DataFrame]:
 
 
 def fetch_valuation(info: MarketInfo) -> Optional[pd.DataFrame]:
-    """A-share valuation indicators (PE/PB/ROE etc.). May fail."""
+    """A-share valuation indicators (PE / PB / market cap etc.). May fail.
+
+    取值顺序：
+    1. 同花顺官方估值快照（PE_TTM / PE_MRQ / PB / PS / PCF）—— 纯 HTTP、
+       线程安全，可安全用于批量扫描；
+    2. 腾讯行情补市值 ``total_mv`` —— 同花顺公开能力不含市值，需另取，
+       同样是纯 HTTP 且线程安全；
+    3. 前两者都不可用时回退 akshare，行为与改动前一致。
+
+    返回至少含 ``pe_ttm`` 列的 DataFrame（下游 0_opportunity.py 按此列取值）。
+    """
     if info.market != "CN":
         return None
+    frames: list[pd.DataFrame] = []
+
+    hv = hithink.fetch_valuation_cn([info.code])
+    if hv is not None and not hv.empty:
+        frames.append(hv.tail(1).reset_index(drop=True))
+
     try:
-        _clear_proxy()
-        import akshare as ak
-        df = ak.stock_a_indicator_lg(symbol=info.code)
-        return df.tail(5) if df is not None and not df.empty else None
+        tq = fetch_tencent_quotes([info.code])
+        if tq is not None and not tq.empty:
+            cap = pd.DataFrame({
+                "total_mv": pd.to_numeric(tq["total_cap_yi"], errors="coerce") * 1e8,
+                "circ_mv": pd.to_numeric(tq["float_cap_yi"], errors="coerce") * 1e8,
+            }).reset_index(drop=True)
+            if not cap.isna().all().all():
+                frames.append(cap)
     except Exception as e:  # noqa: BLE001
-        log.debug("valuation unavailable for %s: %s", info.code, e)
-        return None
+        log.debug("market cap unavailable for %s: %s", info.code, e)
+
+    if not frames:
+        try:
+            _clear_proxy()
+            import akshare as ak
+            df = ak.stock_a_indicator_lg(symbol=info.code)
+            return df.tail(5) if df is not None and not df.empty else None
+        except Exception as e:  # noqa: BLE001
+            log.debug("valuation unavailable for %s: %s", info.code, e)
+            return None
+
+    if len(frames) == 1:
+        return frames[0]
+    merged = pd.concat(frames, axis=1)
+    return merged.loc[:, ~merged.columns.duplicated()]
 
 
 def _batches(items: list, size: int):
@@ -339,6 +380,11 @@ def fetch_growth_factors(info: MarketInfo) -> Optional[dict]:
     """
     if info.market != "CN":
         return None
+    # 优先同花顺财务指标：纯 HTTP 且线程安全，不再受 akshare 并发限制
+    # （akshare 的 mini_racer 在批量并发下会崩）。失败回退原有新浪口径。
+    g = hithink.fetch_growth_cn(info.code)
+    if g:
+        return g
     try:
         _clear_proxy()
         import akshare as ak

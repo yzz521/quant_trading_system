@@ -13,6 +13,7 @@ Run::
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -21,19 +22,20 @@ import pandas as pd
 import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.capital import planned_capital, save_planned_capital
+from quant_trading_system.dashboard.disclaimer import render_disclaimer
 from quant_trading_system.dashboard.paths import notify_config
-from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
-from quant_trading_system.stock_analysis.app_config import (
-    MARKET_LABELS_UI,
-    enabled_markets,
-    load_app_config,
-)
+from quant_trading_system.dashboard.ui_theme import apply_theme, page_header, scan_banner_html
 from quant_trading_system.stock_analysis import (
     add_all_indicators,
     detect_market,
     fetch_kline,
 )
 from quant_trading_system.stock_analysis.ai import explain_plan
+from quant_trading_system.stock_analysis.app_config import (
+    MARKET_LABELS_UI,
+    enabled_markets,
+    load_app_config,
+)
 from quant_trading_system.stock_analysis.backtest import TradingPlanBacktest
 from quant_trading_system.stock_analysis.data_fetcher import (
     fetch_fund_flow,
@@ -52,6 +54,22 @@ from quant_trading_system.utils import load_yaml
 apply_theme()
 require_login()
 page_header("今日机会", "每日投资决策 · V2", "Opportunity")
+
+# --------------------------------------------------------------------------- #
+# 顶部扫描状态条
+# --------------------------------------------------------------------------- #
+# 放在所有耗时操作之前：本页首个「获取全市场快照」要跑数秒，若等它跑完才有内容，
+# 页面在这段时间是纯空白的，用户无法区分「没加载」和「正在分析」。
+# 这里先占好位置并立刻渲染一条带旋转动画的状态，之后每个阶段原地更新文案。
+scan_slot = st.empty()
+
+
+def _set_scan(text: str, state: str = "run") -> None:
+    """更新顶部状态条（run=运行中带动画 / done=完成 / err=失败）。"""
+    scan_slot.markdown(scan_banner_html(text, state), unsafe_allow_html=True)
+
+
+_set_scan("正在初始化…")
 
 _app_cfg = load_app_config(notify_config())
 _opp_cfg = _app_cfg.get("opportunity") or {}
@@ -74,6 +92,7 @@ def _cached_spot():
 # --------------------------------------------------------------------------- #
 st.subheader("📈 市场状态")
 try:
+    _set_scan("正在获取市场状态（全市场快照 + 上证指数）…")
     spot = None
     try:
         spot = _cached_spot()
@@ -108,6 +127,7 @@ st.divider()
 # --------------------------------------------------------------------------- #
 st.subheader("🎯 今日推荐")
 if ACCOUNT <= 0:
+    _set_scan("尚未设置预计投入金额，已暂停扫描", state="err")
     st.warning("尚未设置预计投入金额。设置后才会扫描今日机会（用于计算建议仓位）。")
     setup_cap = st.number_input(
         "预计投入金额（元）",
@@ -173,30 +193,43 @@ def _scan_market(market: str, top_n: int, account_eq: float,
         return [], None
 
 
-scan_res: dict = {}
+scan_res: dict = {m: ([], None) for m in MARKETS}  # 预填，避免中途异常导致 KeyError
 n_mkt = max(len(MARKETS), 1)
-prog = st.progress(0.0, text=f"正在扫描 0/{n_mkt} 市场...")
-for i, m in enumerate(MARKETS):
-    prog.progress(i / n_mkt, text=f"正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（初筛 + 机会引擎）...")
-    with st.spinner(f"⏳ 正在扫描 {i + 1}/{n_mkt} 市场：{MARKET_LABELS[m]}（约 10-20 秒，首次较慢）..."):
+# 状态反馈统一走页面顶部的扫描状态条（sticky 吸顶 + 旋转动画），这里只保留
+# 中间列的一根细进度条做次级提示；扫描完成后清空，不留长期占版面的块。
+prog_slot = st.columns([1, 3, 1])[1].empty()
+try:
+    prog_slot.progress(0.0, text="准备中…")
+    for i, m in enumerate(MARKETS):
+        _set_scan(
+            f"正在扫描 <b>{i + 1}/{n_mkt}</b>：{MARKET_LABELS[m]}（初筛 + 机会引擎，约 10-20 秒）…"
+        )
         scan_res[m] = _scan_market(
             m, int(top_n), ACCOUNT,
             regime.score if regime else None,
             regime.factor if regime else 1.0,
             SCAN_WORKERS,
         )
-    prog.progress((i + 1) / n_mkt, text=f"已完成 {MARKET_LABELS[m]}")
-prog.empty()
-
-# 汇总 caption
-summary_bits = []
-for m in MARKETS:
-    cands, res = scan_res[m]
-    n_c = len(cands)
-    n_p = len(res.plans) if res is not None else 0
-    el = f"{res.elapsed:.0f}s" if res is not None else "—"
-    summary_bits.append(f"{MARKET_LABELS[m]} {n_c}只→{n_p}计划({el})")
-st.caption(" | ".join(summary_bits))
+        prog_slot.progress((i + 1) / n_mkt, text=f"已完成 {i + 1}/{n_mkt}")
+    prog_slot.empty()
+    summary_bits = []
+    n_failed = 0
+    for m in MARKETS:
+        cands, res = scan_res[m]
+        n_c = len(cands)
+        n_p = len(res.plans) if res is not None else 0
+        el = f"{res.elapsed:.0f}s" if res is not None else "—"
+        if res is not None:
+            n_failed += len(res.failed)
+        summary_bits.append(f"{MARKET_LABELS[m]} {n_c}只→{n_p}计划({el})")
+    _tail = f"，{n_failed} 只失败" if n_failed else ""
+    _set_scan(
+        f"扫描完成 · {datetime.now():%H:%M} · {' | '.join(summary_bits)}{_tail}",
+        state="done",
+    )
+except Exception as e:  # noqa: BLE001
+    prog_slot.empty()
+    _set_scan(f"扫描失败：{e}", state="err")
 
 
 def _to_rows(plans: list) -> list:
@@ -543,3 +576,5 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
                     for f in custom_res.failed:
                         st.write(f"- {f.get('name')}({f.get('code')}): {f.get('error')}")
             st.caption(f"耗时 {custom_res.elapsed:.1f}s")
+
+render_disclaimer()

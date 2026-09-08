@@ -33,6 +33,7 @@ SKIP_FILE_NAMES = {
     "holdings.yaml",
     "users.yaml",
     "secret.local.yaml",
+    "hithink.env",
     ".DS_Store",
     "GP-Assistant-Windows.zip",
 }

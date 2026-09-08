@@ -143,6 +143,16 @@ datas += [
     (str(_notify_src), "config"),
     (str(_dash_src), "quant_trading_system/dashboard"),
 ]
+# A 股数据源 Key 模板：只放空模板供使用者参考，真实 Key 留在 exe 旁 config/
+_hithink_src = _REPO_ROOT / "config" / "hithink.env.example"
+if _hithink_src.is_file():
+    datas += [(str(_hithink_src), "config")]
+
+# 安全网：真实 Key 文件绝不能进包 —— 否则每个拿到安装包的人都能提取到你的 Key，
+# 且会共用你的调用额度。只允许 hithink.env.example 空模板进包。
+_leaked = [d for d in datas if str(d[0]).replace("\\", "/").endswith("/hithink.env")]
+if _leaked:
+    raise SystemExit("FATAL: 真实 Key 文件被打进包: %s" % (_leaked,))
 if _st_cfg.is_dir():
     datas += [(str(_st_cfg), ".streamlit")]
 

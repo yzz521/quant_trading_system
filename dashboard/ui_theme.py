@@ -191,12 +191,106 @@ div[data-testid="stForm"] button[kind="primary"],
 
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
+/* 右上角框架自带的 RUNNING 徽章：执行状态已由页面顶部的扫描状态条承担，
+   这里隐去，避免同一状态在两处各显示一次、且弱化角落里的低可见度提示。
+   顶部 stDecoration 进度条保留，运行期间仍有轻量反馈。 */
+[data-testid="stStatusWidget"] { visibility: hidden; }
+
+/* ---- 顶部扫描状态条：页面一开始就渲染，运行期间吸顶，带旋转环 + 流光进度 ---- */
+@keyframes qts-spin { to { transform: rotate(360deg); } }
+@keyframes qts-sweep { 0% { left: -40%; } 100% { left: 100%; } }
+
+.qts-scan {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  padding: .7rem 1rem;
+  margin: .25rem 0 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(0,229,255,.28);
+  background: linear-gradient(120deg, rgba(0,229,255,.13), rgba(124,92,255,.11));
+  box-shadow: 0 0 24px rgba(0,229,255,.10);
+}
+.qts-scan.run {
+  position: sticky;
+  top: .5rem;
+  z-index: 990;
+  backdrop-filter: blur(10px);
+}
+.qts-scan .ring {
+  flex: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .72rem; font-weight: 700; line-height: 1;
+  border: 2px solid rgba(0,229,255,.22);
+  border-top-color: #00e5ff;
+  animation: qts-spin .8s linear infinite;
+}
+.qts-scan .txt {
+  color: #cfe4ff;
+  font-size: .9rem;
+  letter-spacing: .02em;
+  text-align: center;
+}
+.qts-scan .txt b { color: #7dd3fc; font-weight: 600; }
+.qts-scan::after {
+  content: "";
+  position: absolute;
+  left: -40%; bottom: 0;
+  height: 2px; width: 40%;
+  background: linear-gradient(90deg, transparent, #00e5ff, transparent);
+  animation: qts-sweep 1.5s ease-in-out infinite;
+}
+.qts-scan.done {
+  padding: .45rem .9rem;
+  margin-bottom: .7rem;
+  border-color: rgba(34,197,94,.34);
+  background: linear-gradient(120deg, rgba(34,197,94,.10), rgba(0,229,255,.05));
+  box-shadow: none;
+}
+.qts-scan.done .ring {
+  animation: none;
+  border: 2px solid rgba(34,197,94,.45);
+  color: #22c55e;
+}
+.qts-scan.done::after { display: none; }
+.qts-scan.err {
+  border-color: rgba(248,113,113,.42);
+  background: linear-gradient(120deg, rgba(248,113,113,.14), rgba(124,92,255,.05));
+}
+.qts-scan.err .ring {
+  animation: none;
+  border: 2px solid rgba(248,113,113,.5);
+  color: #f87171;
+}
+.qts-scan.err::after { display: none; }
 </style>
 """
 
 
 def apply_theme() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+SCAN_GLYPH = {"done": "✓", "err": "!"}
+
+
+def scan_banner_html(text: str, state: str = "run") -> str:
+    """顶部扫描状态条 HTML。
+
+    state: ``run`` 运行中（旋转环 + 流光，吸顶）/ ``done`` 完成 / ``err`` 失败。
+    """
+    glyph = SCAN_GLYPH.get(state, "")
+    return (
+        f'<div class="qts-scan {state}">'
+        f'<span class="ring">{glyph}</span>'
+        f'<span class="txt">{text}</span>'
+        f"</div>"
+    )
 
 
 def page_header(title: str, subtitle: str = "", accent: str | None = None) -> None:

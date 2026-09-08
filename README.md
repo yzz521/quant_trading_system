@@ -181,6 +181,7 @@ quant_trading_system/
 │   ├── holdings_action.py   # 卖出/加仓参考
 │   ├── trade_monitor.py     # 粘贴成交解析 + 同步持仓（parser + apply_trade）
 │   ├── data_fetcher.py      # 多市场行情（A股/美股/港股，多源降级 + 成长因子）
+│   ├── hithink.py           # A 股数据源（同花顺官方 REST，可选；未配置/失败自动回退）
 │   ├── indicators.py        # 技术指标（MA/MACD/RSI/KDJ/BOLL/ATR/ADX/VWAP/斐波那契）
 │   ├── patterns.py          # K线形态（吞没/晨暮星/三兵三鸦等，接入机会分相似形态）
 │   ├── news.py              # 信息面（东财公告+新闻关键词，接入个股分 risk）
@@ -192,7 +193,7 @@ quant_trading_system/
 ├── app/                     # 桌面应用壳（pywebview + PyInstaller）
 ├── deploy/                  # restart.sh / ctl.py（跨平台管理）
 ├── examples/                # 7 个冒烟脚本
-├── config/                  # notify.yaml.example、holdings.yaml（勿提交真实密钥）
+├── config/                  # notify.yaml.example、hithink.env.example、holdings.yaml（勿提交真实密钥）
 ├── tests/                   # 147 项测试
 └── docs/
 ```
@@ -206,8 +207,35 @@ quant_trading_system/
 | `config/notify.yaml.example` | 复制为 `notify.yaml` 后填推送凭证；也可在看板「配置」页保存（SMTP/Server酱/飞书/ai/监测市场） |
 | `config/holdings.yaml` / `.db` | 持仓配置与 SQLite 数据（本地） |
 | `config/users.yaml` | 看板登录（不存在时自动放行） |
+| `config/hithink.env` | 同花顺 API Key（**可选**，不配置则 A 股沿用旧数据源）。推荐在看板「配置」页填写 |
 
-**不要**把 `notify.yaml`、真实 `holdings.db`、SMTP / Server酱 / 飞书密钥提交到 Git（`.gitignore` 已覆盖）。
+**不要**把 `notify.yaml`、真实 `holdings.db`、`hithink.env`、SMTP / Server酱 / 飞书密钥提交到 Git（`.gitignore` 已覆盖）。
+
+---
+
+## A 股数据源（可选：同花顺官方源）
+
+A 股行情 / 估值 / 财务默认走 akshare（新浪 / 腾讯）。配置同花顺金融数据服务 API Key 后，
+A 股会自动切换到同花顺官方源，更稳定且支持服务端前复权。
+
+| 项目 | 说明 |
+|------|------|
+| 覆盖范围 | **仅 A 股（含场内 ETF）**的行情、估值、财务指标 |
+| 不受影响 | 港股、美股数据源完全不变 |
+| 未配置时 | 自动回退原有数据源，功能不中断 |
+| 请求失败时 | 同样自动回退；鉴权失败熔断 5 分钟，避免拖慢批量扫描 |
+
+**配置方式（二选一）**
+
+1. 看板「配置」页 →「A 股数据源」→ 粘贴 Key →「保存并启用」（可点「测试连接」验证）；
+2. 复制 `config/hithink.env.example` 为 `config/hithink.env` 并填入 Key；或设置环境变量
+   `HITHINK_FINANCE_API_KEY`（优先级最高，打包后三端通用）。
+
+Key 在 <https://fuyao.aicubes.cn/admin> 申请。
+
+> **分发提醒**：安装包只含 `hithink.env.example` 空模板，真实 Key 留在可执行文件旁的
+> `config/`，不随包分发。把安装包给他人时，请让对方自行申请 Key —— 共用一个 Key 会触发
+> 限流，且滥用会追溯到你的账号。
 
 ---
 
@@ -238,4 +266,4 @@ V2 设计文档（中英）：`docs/quant_trading_system_v2_dev_plan_zh.md` / `_
 
 ## 致谢
 
-数据接口：akshare（新浪/同花顺）/ yfinance / nasdaq screener / 腾讯行情。仅供研究学习，不构成投资建议。
+数据接口：同花顺金融数据服务（A 股官方源，可选）/ akshare（新浪）/ 腾讯行情 / yfinance / nasdaq screener。仅供研究学习，不构成投资建议。

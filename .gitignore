@@ -34,6 +34,7 @@ config/notify.yaml
 config/holdings.yaml
 config/holdings.yaml.example
 config/*.local.yaml
+config/hithink.env
 
 # ---- 本地 SQLite 数据库（持仓管理，任意位置）----
 **/*.db

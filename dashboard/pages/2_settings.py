@@ -23,9 +23,17 @@ from quant_trading_system.stock_analysis.app_config import (
     save_app_config,
     smtp_preset_name,
 )
-
+from quant_trading_system.stock_analysis.hithink import (
+    clear_api_key,
+    masked_key,
+    save_api_key,
+    test_connection,
+)
+from quant_trading_system.stock_analysis.hithink import (
+    is_enabled as hithink_enabled,
+)
 from quant_trading_system.utils.app_meta import APP_VERSION, GITHUB_RELEASES_PAGE
-from quant_trading_system.utils.updater import check_latest, apply_and_restart, is_frozen
+from quant_trading_system.utils.updater import apply_and_restart, check_latest, is_frozen
 
 apply_theme()
 require_login()
@@ -99,6 +107,46 @@ markets = st.multiselect(
     key="cfg_markets",
     help="至少选一个。只选 A 股时扫描最快。",
 )
+
+# --------------------------------------------------------------------------- #
+st.subheader("A 股数据源")
+st.caption(
+    "配置后，A 股行情 / 估值 / 财务改走同花顺官方源（更稳定、支持服务端前复权）；"
+    "不配置则沿用原数据源。**港股与美股不受影响。**"
+)
+if hithink_enabled():
+    st.success(f"当前状态：同花顺官方源已启用（{masked_key()}）")
+else:
+    st.info("当前状态：未配置，A 股沿用原数据源（akshare / 新浪 / 腾讯）")
+
+hit_key = st.text_input(
+    "同花顺 API Key",
+    value="",
+    type="password",
+    placeholder="留空表示不修改",
+    key="hithink_key",
+    help="在 fuyao.aicubes.cn 申请。仅保存在本机 config/hithink.env，不上传、也不会打进安装包。",
+)
+_hc1, _hc2, _hc3 = st.columns(3)
+with _hc1:
+    if st.button("保存并启用", key="hithink_save"):
+        if hit_key.strip():
+            if save_api_key(hit_key.strip()):
+                st.success("已保存，A 股改用同花顺官方源")
+                st.rerun()
+            else:
+                st.error("保存失败，请检查 config 目录写权限")
+        else:
+            st.warning("请先粘贴 Key")
+with _hc2:
+    if st.button("测试连接", key="hithink_test"):
+        _ok, _msg = test_connection()
+        (st.success if _ok else st.error)(_msg)
+with _hc3:
+    if hithink_enabled() and st.button("清除并回退", key="hithink_clear"):
+        clear_api_key()
+        st.success("已清除，A 股回到原数据源")
+        st.rerun()
 
 # --------------------------------------------------------------------------- #
 st.subheader("邮件推送")
