@@ -34,12 +34,6 @@ RATING_COLOR = {
 }
 
 
-def _chg_color(val: float) -> str:
-    if val is None:
-        return NEUTRAL
-    return UP if val >= 0 else DOWN
-
-
 def _fmt_pct(v) -> str:
     if v is None:
         return "—"

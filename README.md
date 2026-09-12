@@ -109,7 +109,7 @@ pip install akshare streamlit
 ### 3. 运行测试与示例
 
 ```bash
-pytest -q                          # 147 项测试
+pytest -q                          # 208 项测试
 ruff check stock_analysis dashboard utils examples
 
 # 单票交易计划（联网，默认 600000）
@@ -127,6 +127,8 @@ python examples/run_backtest_plan.py 600000 --days 750
 python examples/my_holdings.py
 # 邮件模板预览（写 results/email_*_preview.html）
 python examples/gen_email_preview.py
+# 配置与调度器自检（持仓数量/通知渠道/最近运行状态；--send-test 真发一封测试）
+python examples/check_notify.py
 ```
 
 ---
@@ -194,7 +196,7 @@ quant_trading_system/
 ├── deploy/                  # restart.sh / ctl.py（跨平台管理）
 ├── examples/                # 7 个冒烟脚本
 ├── config/                  # notify.yaml.example、hithink.env.example、holdings.yaml（勿提交真实密钥）
-├── tests/                   # 147 项测试
+├── tests/                   # 208 项测试
 └── docs/
 ```
 
