@@ -9,7 +9,7 @@ Usage::
     python deploy/ctl.py stop-all
     python deploy/ctl.py status
     python deploy/ctl.py dashboard start
-    python deploy/ctl.py holdings stop
+    python deploy/ctl.py realtime restart
     python deploy/ctl.py scheduler start
 
 Environment::
@@ -88,9 +88,17 @@ SERVICES = {
         "script": "examples/run_scheduler.py",
         "port_key": None,
     },
+    "realtime": {
+        "desc": "实时盯盘（快轨，秒级）",
+        "script": "examples/run_realtime.py",
+        "port_key": None,
+    },
 }
 
-DEFAULT_ALL = ["dashboard"]  # 仅一个 Web 端口；调度器需 --with-scheduler  # scheduler 需 notify 配置，默认不自动起
+DEFAULT_ALL = ["dashboard", "realtime"]  # 仅一个 Web 端口；调度器需 --with-scheduler
+# 快轨默认随 start-all 拉起：realtime.enabled=false 时它常驻待命、零行情请求，
+# 所以"默认起"是安全的；开关一开就自动开始盯，不必再重启进程。
+# scheduler 需先配好 notify 凭据，故不放进默认集合。
 
 
 def _pid_file(name: str) -> Path:
@@ -101,30 +109,67 @@ def _log_file(name: str) -> Path:
     return RESULTS / f"{name}.log"
 
 
+def _proc_running(name: str) -> int | None:
+    """pid 文件缺失/失效时的兜底：按命令行特征探测真实运行进程。
+
+    调度器由 launchd 托管时没有 ``scheduler.pid``，``_is_running`` 仅靠 pid 文件会
+    误报「未运行」。这里用 pgrep 匹配服务的脚本/模块路径（非 Windows）。探测失败
+    返回 None，不抛异常。
+    """
+    if IS_WIN:
+        return None
+    meta = SERVICES.get(name)
+    if not meta:
+        return None
+    token = meta.get("script") or meta.get("module")
+    if not token:
+        return None
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", token],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in out.stdout.splitlines():
+            line = line.strip()
+            if not line.isdigit():
+                continue
+            pid = int(line)
+            try:
+                os.kill(pid, 0)
+                return pid
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _is_running(name: str) -> int | None:
     pf = _pid_file(name)
-    if not pf.exists():
-        return None
-    try:
-        pid = int(pf.read_text().strip())
-    except ValueError:
-        return None
-    try:
-        if IS_WIN:
-            # tasklist filter
-            out = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
-            if str(pid) in out.stdout and "INFO:" not in out.stdout:
-                return pid
-            return None
-        os.kill(pid, 0)
-        return pid
-    except OSError:
-        return None
+    if pf.exists():
+        try:
+            pid = int(pf.read_text().strip())
+        except ValueError:
+            pid = None
+        if pid is not None:
+            try:
+                if IS_WIN:
+                    # tasklist filter
+                    out = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}"],
+                        capture_output=True,
+                        text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                    )
+                    if str(pid) in out.stdout and "INFO:" not in out.stdout:
+                        return pid
+                else:
+                    os.kill(pid, 0)
+                    return pid
+            except OSError:
+                pass  # pid 文件失效，继续走进程级探测
+    # 兜底：pid 文件缺失或指向已死进程时，按命令行特征探测（launchd 托管场景）
+    return _proc_running(name)
 
 
 def _start_one(name: str) -> None:
@@ -232,6 +277,7 @@ def cmd_start_all(include_scheduler: bool = False) -> None:
         _start_one(n)
     print("\n完成。打开浏览器: http://localhost:%s" % _ports()["dashboard"])
     print("（左侧切换：持仓与卖出 / 个股诊断 / 研究工具）")
+    print("快轨是否真的在盯：python deploy/ctl.py realtime status  或看板上方状态条")
 
 
 def cmd_stop_all() -> None:

@@ -44,6 +44,11 @@ trade_monitor:
 
 # 推送渠道（启用哪个填哪个的凭证）
 notify:
+  # 发送重试：遇到瞬时网络/DNS 抖动（如 [Errno 8] 域名解析失败）自动重试，
+  # 避免当天邮件被一次性丢弃。max_attempts=1 可关闭重试。
+  retry:
+    max_attempts: 3        # 每个渠道最多尝试次数（含首次）
+    backoff_sec: 5         # 每次重试前的退避秒数
   email:
     enabled: false
     smtp_host: "smtp.qq.com"
@@ -69,6 +74,52 @@ schedule:
   ushk_interval_min: 10      # 美股/港股：每 10 分钟
   us_winter: true            # true=冬令时(21:30)，false=夏令时(22:30)
   poll_interval_sec: 60      # 调度器主循环检查间隔
+
+# 实时盯盘（快轨）— 与上面的 schedule（慢轨）解耦，默认关闭
+# 慢轨：每 30~60 分钟跑「全市场初筛 + 批量机会扫描 + 完整邮件」，回答"今天该关注哪些票"
+# 快轨：只盯持仓/自选（几十只票 1 个批量请求），盘中秒级轮询，命中规则才推，回答"现在要不要动手"
+# 入口：python -m quant_trading_system.stock_analysis.realtime  或  examples/run_realtime.py
+realtime:
+  enabled: false             # 打开后才开始轮询；false 时零网络请求、零行为变化
+  interval_sec: 5            # 开市中的轮询间隔（秒）
+  idle_interval_sec: 60      # 午休/非交易时段的轮询间隔（降频，避免空转）
+  watch_mode: holdings       # holdings=只盯持仓 / watchlist=只盯 watchlist / both=两者 / pool=stock_pools
+  watchlist: []              # watch_mode 含 watchlist 时生效，元素可写 '600438' 或 {code, name, market}
+  cooldown_min: 30           # 同一只票同一条规则多少分钟内只推一次（防刷屏，最关键的一项）
+  min_push_gap_sec: 20       # 两次推送之间的最小间隔；间隔内的非致命告警转入摘要缓冲而非丢弃
+  digest_min: 0              # >0 时"提示/资讯"级告警聚合成一条摘要每 N 分钟推一次；0=全部立即推
+  levels_from_cache: false   # true=从当日持仓量化结果自动取关键位（止损位 / 卖出区间下沿）
+                             #      喂给下面的 price_cross，不用手输价位；只认当天结果
+                             #      与 price_cross.levels 同时存在时，手输的优先
+  rules:
+    pct_change:              # 日内涨跌幅异动（最常用）
+      enabled: true
+      cn_stock: 4.0          # A股个股 ±4%
+      cn_etf: 2.0            # A股 ETF ±2%（513310/159558 这类走这条）
+      hk: 3.0
+      us: 5.0
+    speed:                   # 短时急拉/急杀（基于内存价格序列，不需要 K 线）
+      enabled: true
+      window_min: 3
+      pct: 1.0               # 3 分钟内涨跌超 1% 即报
+    stop_loss:               # 成本止损（需持仓有 cost_price）
+      enabled: true
+      pct: -8.0
+    take_profit:             # 成本止盈
+      enabled: true
+      pct: 15.0
+    trailing_stop:           # 动态止盈：盈利达 start_pct 启动追踪，自峰值回撤 drawdown_pct 触发
+      enabled: false
+      start_pct: 5.0
+      drawdown_pct: 10.0
+    price_cross:             # 关键位穿越（价位可来自 levels_from_cache，也可在此手输）
+      enabled: false         # 未显式写这一行时，跟随 levels_from_cache 自动开关
+      alert_if_outside: false  # true=首轮也补报"本来就在关键位外侧"的（深套仓位否则等不到穿越）
+      levels: {}             # 例：'600438': {below: 10.0, above: 13.0}
+    turnover_surge:          # 换手率异动（放量信号）
+      enabled: false
+      pct: 10.0
+
 
 # AI 解读（可选）— OpenAI 兼容接口：DeepSeek / 硅基流动 / 通义兼容模式 / OpenAI
 # 只根据本系统已算好的交易计划写人话，不替代买卖决策

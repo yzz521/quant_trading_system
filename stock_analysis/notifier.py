@@ -56,24 +56,51 @@ class Notifier:
         html: Optional[str] = None,
         attachments: Optional[list[tuple[str, bytes]]] = None,
     ) -> dict:
-        """attachments: [(filename, bytes)]，仅 email 渠道会附带。"""
+        """attachments: [(filename, bytes)]，仅 email 渠道会附带。
+
+        每个渠道内置重试：遇到瞬时网络/DNS 抖动（如 ``[Errno 8] nodename nor
+        servname provided`` 域名解析失败）会在退避后重试，避免当轮邮件被一次性
+        丢弃。重试参数从 ``notify.retry`` 读取，默认 ``max_attempts=3``、
+        ``backoff_sec=5``；设为 ``max_attempts: 1`` 可关闭重试。
+        """
         if not self.channels:
             log.info("无启用渠道，仅打印：\n%s\n%s", title, text)
             return {"_print": True}
-        results = {}
+        retry_cfg = self._notify_cfg.get("retry") or {}
+        max_attempts = max(1, int(retry_cfg.get("max_attempts", 3)))
+        backoff = max(0.0, float(retry_cfg.get("backoff_sec", 5)))
+        body_html = html or text
+        attach = attachments or []
+        results: dict = {}
         for ch in self.channels:
-            try:
-                if ch == "email":
-                    self._send_email(title, text, html or text, attachments or [])
-                elif ch == "serverchan":
-                    self._send_serverchan(title, text)
-                elif ch == "feishu":
-                    self._send_feishu(title, text)
-                results[ch] = "ok"
-                log.info("推送成功 [%s] %s", ch, title)
-            except Exception as e:  # noqa: BLE001
-                results[ch] = f"fail: {e}"
-                log.error("推送失败 [%s]: %s", ch, e)
+            last_err: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if ch == "email":
+                        self._send_email(title, text, body_html, attach)
+                    elif ch == "serverchan":
+                        self._send_serverchan(title, text)
+                    elif ch == "feishu":
+                        self._send_feishu(title, text)
+                    if attempt > 1:
+                        log.info("推送成功 [%s] %s（第 %d/%d 次重试成功）",
+                                 ch, title, attempt, max_attempts)
+                    else:
+                        log.info("推送成功 [%s] %s", ch, title)
+                    results[ch] = "ok"
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    if attempt < max_attempts:
+                        log.warning(
+                            "推送失败 [%s] 第 %d/%d 次: %s；%.0fs 后重试",
+                            ch, attempt, max_attempts, e, backoff,
+                        )
+                        if backoff > 0:
+                            time.sleep(backoff)
+                    else:
+                        results[ch] = f"fail: {e}"
+                        log.error("推送失败 [%s]: %s", ch, e)
         return results
 
     # ------------------------------------------------------------------ #
