@@ -4,10 +4,17 @@
 仓位建议，最终由 TradingPlan 统一表达。
 """
 from .batch_scanner import BatchScanItem, BatchScanResult, OpportunityBatchScanner
-from .entry_price import EntryPrice, calc_entry_zone
+from .entry_price import EntryPrice, calc_entry_zone, reconcile_entry_zone
 from .exit_price import ExitPrice, calc_exit_prices
 from .opportunity_engine import OpportunityEngine
 from .position_sizing import PositionSizing, calc_position_size
+from .quality_gate import (
+    DataCoverage,
+    QualityGateConfig,
+    QualityGateResult,
+    compute_coverage,
+    evaluate,
+)
 from .risk_reward import RiskReward, calc_risk_reward
 from .support_resistance import SupportResistance, detect_support_resistance
 from .trading_plan import DecisionState, TradingPlan, build_trading_plan
@@ -17,6 +24,7 @@ __all__ = [
     "detect_support_resistance",
     "EntryPrice",
     "calc_entry_zone",
+    "reconcile_entry_zone",
     "ExitPrice",
     "calc_exit_prices",
     "RiskReward",
@@ -30,4 +38,9 @@ __all__ = [
     "BatchScanItem",
     "BatchScanResult",
     "OpportunityBatchScanner",
+    "QualityGateConfig",
+    "QualityGateResult",
+    "DataCoverage",
+    "compute_coverage",
+    "evaluate",
 ]

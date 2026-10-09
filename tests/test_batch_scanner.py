@@ -212,7 +212,8 @@ class TestBatchScan:
     def test_to_dict(self):
         res = _scanner(_FakeEngine({"A": DecisionState.BUY_NOW})).scan(["A"])
         d = res.to_dict()
-        assert set(d) == {"plans", "items", "failed", "elapsed"}
+        assert set(d) == {"plans", "items", "failed", "elapsed",
+                          "fundamentals_available", "gate_note"}
         assert isinstance(d["elapsed"], float)
 
     def test_min_score_filter(self):
@@ -238,3 +239,87 @@ class TestWithEmailIntegration:
         _, text, html = build_market_message("CN", [], trading_plans=res.plans)
         assert "今日机会 · 交易计划" in html
         assert "今日机会 · 交易计划" in text
+
+
+class TestQualityDataPlumbing:
+    """闸门数据链路的两个真实缺陷（回归）。
+
+    1. 批量链路从不预取快照字段（PE / 总市值 / 换手）。闸门的
+       ``min_data_coverage`` 门槛是 40%，而 ``ALL_FIELDS`` 有 7 个 ⇒ 至少 3 个
+       字段；财务接口只给 ``profit_yoy`` / ``rev_yoy`` 两个，**凑不满** ——
+       缺了 CORE 三件套，覆盖率恒为 2/7≈29%，闸门必然降级、BUY_NOW 通过率恒为 0。
+       看板路径是手工补这三个字段的，批量链路（邮件/调度器）一直漏了。
+    2. ``fundamentals_available`` 只看数据源「配好了吗」，配置了但一个字段都
+       取不到时仍报 True —— 标志位在说谎，用户以为闸门在把关。
+    """
+
+    @staticmethod
+    def _fake_quotes(codes, **kw):
+        return pd.DataFrame([
+            {"code": c, "pe": 12.0, "total_cap_yi": 3000.0, "turnover": 1.5}
+            for c in codes
+        ])
+
+    def _patch(self, monkeypatch, *, fundamentals=None):
+        from quant_trading_system.stock_analysis.opportunity import batch_scanner as bs
+
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.data_fetcher.fetch_tencent_quotes",
+            self._fake_quotes,
+        )
+        monkeypatch.setattr(
+            bs, "_fetch_fundamentals_threadsafe",
+            lambda code, market: dict(fundamentals or {}),
+        )
+
+    @staticmethod
+    def _engine_with_gate(**gate_kw):
+        from quant_trading_system.stock_analysis.opportunity.quality_gate import (
+            QualityGateConfig,
+        )
+
+        engine = _FakeEngine({"600000": DecisionState.BUY_NOW})
+        engine.quality_gate = QualityGateConfig(**gate_kw)
+        return engine
+
+    def test_snapshot_injected_when_gate_needs_coverage(self, monkeypatch):
+        self._patch(monkeypatch)
+        res = _scanner(self._engine_with_gate()).scan(["600000"])
+        extra = res.items[0].extra
+        assert extra["pe"] == 12.0
+        assert extra["total_cap_yi"] == 3000.0
+        assert extra["turnover"] == 1.5
+
+    def test_snapshot_skipped_when_gate_needs_no_coverage(self, monkeypatch):
+        """闸门不要求覆盖率就不该白拉快照（省一次网络请求）。"""
+        called: list = []
+
+        def spy(codes, **kw):
+            called.append(list(codes))
+            return self._fake_quotes(codes)
+
+        self._patch(monkeypatch)
+        monkeypatch.setattr(
+            "quant_trading_system.stock_analysis.data_fetcher.fetch_tencent_quotes", spy,
+        )
+        _scanner(self._engine_with_gate(min_data_coverage=0.0)).scan(["600000"])
+        assert called == []
+
+    def test_flag_false_when_source_configured_but_nothing_fetched(self, monkeypatch):
+        """回归：数据源「配好了」但没取到任何质量字段 → 标志位必须为 False。"""
+        from quant_trading_system.stock_analysis.opportunity import batch_scanner as bs
+
+        self._patch(monkeypatch)
+        monkeypatch.setattr(bs, "fundamentals_available", lambda: True)
+        res = _scanner(self._engine_with_gate()).scan(["600000"])
+        assert res.fundamentals_available is False
+        assert "未取到任何质量类字段" in res.gate_note
+
+    def test_flag_true_when_quality_fields_actually_fetched(self, monkeypatch):
+        from quant_trading_system.stock_analysis.opportunity import batch_scanner as bs
+
+        self._patch(monkeypatch, fundamentals={"profit_yoy": 18.5})
+        monkeypatch.setattr(bs, "fundamentals_available", lambda: True)
+        res = _scanner(self._engine_with_gate()).scan(["600000"])
+        assert res.fundamentals_available is True
+        assert res.gate_note == ""
