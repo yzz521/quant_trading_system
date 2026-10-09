@@ -1,5 +1,7 @@
 # 实盘适配器与 SDK 接入说明
 
+> **V1 遗留说明（`main` 分支）。** 下文里的 `execution/`、`LiveBroker`、`examples/live_paper_trading.py` 和 `quant-trading-system[live]` **不在 `main-v3` 上**。当前分支没有券商下单实现；最接近的是 `stock_analysis/shadow_orders.py`（只写订单意图，不发送委托）。不要按本文去改本分支的运行时代码。
+
 仓库里的 `execution/ctp_broker.py`、`ibkr_broker.py`、`binance_broker.py` **不是**内置的可执行交易程序，而是**接口骨架**：方法签名与 `LiveBroker` 对齐，网络调用处为 `NotImplementedError`，避免误下真单。
 
 ## SDK 从哪里来？
