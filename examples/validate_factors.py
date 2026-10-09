@@ -192,12 +192,15 @@ def main() -> int:
     # ---- 2) 明细 + 滚动前瞻 ----
     detail: dict[str, dict] = {}
     for f in _FACTORS:
-        rep = validate_factor(panel, f, "ret", n_quantiles=args.quantiles)
+        # 先算滚动前瞻，再让 verdict 用它 —— 否则「汇总说可用、明细说样本外没延续」
+        # 会自相矛盾（2026-10 裁决：样本外同号折数是必要条件）。
+        wf = walk_forward_factor(panel, f, "ret", n_splits=args.splits)
+        rep = validate_factor(panel, f, "ret", n_quantiles=args.quantiles,
+                              walk_forward=wf)
         detail[f] = rep
         print("\n" + "-" * 66)
         print(summarize(rep))
 
-        wf = walk_forward_factor(panel, f, "ret", n_splits=args.splits)
         if not wf.empty:
             kept = int(wf["sign_kept"].sum())
             print(f"  滚动前瞻样本外：{kept}/{len(wf)} 折保持同号")

@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
@@ -57,6 +58,57 @@ _IC_TOL = 0.02            # 滚动前瞻中「训练→测试 IC 同号」的容
 # --------------------------------------------------------------------------- #
 _MONO_MAX_INVERSIONS = 1   # 最多容忍几对相邻逆序
 _MONO_RHO_MIN = 0.60       # 准单调时要求的 |Spearman ρ| 下限
+
+# --------------------------------------------------------------------------- #
+# 样本外稳健性门槛（2026-10 裁决：由「仅报告」升级为「必要条件」）
+#
+# 条件②要求「可用因子 ≥2 个 **且符号稳定**」。一个因子的符号在全样本上为正，
+# 不代表它在样本外仍为正 —— 「符号是否稳定」**只能**由滚动前瞻回答。
+#
+# 原实现里 ``walk_forward_factor`` 的结果只写进报告、从不参与 verdict：
+# 于是「符号稳定」这条要求形同虚设，验证成了仪式（正是本模块最反对的那种自欺）。
+# 本裁决把它变成判定链上的必要条件 —— 这不是**新设**门槛，而是让
+# 已经声明过的验收标准（滚动前瞻 ≥3/4 折同号）真正生效。
+#
+# 折数守卫：折数太少时**不启用**该门槛（``_WF_MIN_FOLDS``）。这遵守同一原则
+# ——「没测出来」不等于「测出来不稳」，不能拿样本不足当反对票。
+# --------------------------------------------------------------------------- #
+_WF_MIN_FOLDS = 3          # 折数少于此值 → 门槛不启用（证据不足，不惩罚）
+_WF_MIN_KEPT_RATIO = 0.75  # 要求的同号折占比（4 折 ⇒ 至少 3 折同号）
+
+
+def _wf_need_kept(n_folds: int) -> int:
+    """给定折数下「至少几折同号」才算稳健。"""
+    return max(1, int(math.ceil(_WF_MIN_KEPT_RATIO * int(n_folds))))
+
+
+def walk_forward_summary(wf: "pd.DataFrame") -> dict:
+    """把 ``walk_forward_factor`` 的逐折结果压成判定用的汇总。
+
+    返回 ``{"n_folds", "n_sign_kept", "kept_ratio"}``。空表 → 全 0 / None。
+    """
+    if wf is None or len(wf) == 0:
+        return {"n_folds": 0, "n_sign_kept": 0, "kept_ratio": None}
+    n = int(len(wf))
+    if "sign_kept" in wf.columns:
+        k = int(wf["sign_kept"].astype(bool).sum())
+    else:
+        k = 0
+    return {"n_folds": n, "n_sign_kept": k, "kept_ratio": round(k / n, 3) if n else None}
+
+
+def _walk_forward_shortfall(walk_forward: Optional[dict]) -> Optional[str]:
+    """滚动前瞻不达标时的说明文案；达标 / 未提供 / 折数不足 → ``None``。"""
+    wf = walk_forward or {}
+    n_folds = int(wf.get("n_folds") or 0)
+    if n_folds < _WF_MIN_FOLDS:
+        return None                      # 折数太少 = 没测出来 ≠ 测出来不稳
+    n_kept = int(wf.get("n_sign_kept") or 0)
+    need = _wf_need_kept(n_folds)
+    if n_kept >= need:
+        return None
+    return (f"样本外不稳健（滚动前瞻仅 {n_kept}/{n_folds} 折 IC 同号，"
+            f"低于要求 {need}/{n_folds}），按「不稳定」降权处理")
 
 # --------------------------------------------------------------------------- #
 # 「无区分力」的显著性门槛（口径事先固定）
@@ -288,7 +340,13 @@ def quantile_monotonicity(qret: pd.DataFrame) -> dict:
     }
 
 
-def _verdict(stats: dict, mono: dict, *, expected_sign: int = 1) -> str:
+def _verdict(
+    stats: dict,
+    mono: dict,
+    *,
+    expected_sign: int = 1,
+    walk_forward: Optional[dict] = None,
+) -> str:
     """给一个因子下结论（人话，可直接进报告）。
 
     返回文案会被 ``factor_weights.classify_verdict`` 按**关键词**归类
@@ -297,6 +355,9 @@ def _verdict(stats: dict, mono: dict, *, expected_sign: int = 1) -> str:
     Args:
         expected_sign: 该因子被假定的方向。本系统的四个因子都按「越大越好」使用，
             故默认 ``+1``。方向校验见下。
+        walk_forward: ``walk_forward_summary`` 的汇总（``n_folds`` / ``n_sign_kept``）。
+            提供且不达标时判「样本外不稳健」（按「不稳定」降权）。
+            为 ``None``（或折数不足）时不做此判定 —— 保持向后兼容。
     """
     if stats.get("n_periods", 0) < _MIN_PERIODS:
         return f"样本不足（仅 {stats.get('n_periods', 0)} 期，需 ≥{_MIN_PERIODS}）"
@@ -340,9 +401,17 @@ def _verdict(stats: dict, mono: dict, *, expected_sign: int = 1) -> str:
         if rho is None or abs(float(rho)) < _MONO_RHO_MIN:
             return (f"分组不单调（仅 {n_inv} 对逆序，但 ρ={rho} 未达补偿门槛 "
                     f"{_MONO_RHO_MIN}）")
-        return (f"可用（IC/IR 达标；分组准单调：仅 {n_inv} 对相邻逆序，"
-                f"ρ={rho} ≥ {_MONO_RHO_MIN} 补偿达标）")
-    return "可用（IC/IR 与分组单调性均达标）"
+        ok_text = (f"可用（IC/IR 达标；分组准单调：仅 {n_inv} 对相邻逆序，"
+                   f"ρ={rho} ≥ {_MONO_RHO_MIN} 补偿达标）")
+    else:
+        ok_text = "可用（IC/IR 与分组单调性均达标）"
+    # ---- 样本外稳健性（必要条件，2026-10 裁决）----
+    # 放在最后：只有在 IC/IR/方向/单调性全部达标后，才用样本外证据决定「可用」
+    # 还是「按不稳定降权」—— 前四项不达标时已经提前返回，理由更具体。
+    shortfall = _walk_forward_shortfall(walk_forward)
+    if shortfall:
+        return shortfall
+    return ok_text
 
 
 def validate_factor(
@@ -354,18 +423,22 @@ def validate_factor(
     date_col: str = "date",
     min_names: int = _MIN_NAMES,
     expected_sign: int = 1,
+    walk_forward: Optional[pd.DataFrame] = None,
 ) -> dict:
     """单因子完整体检：IC/IR + 分位收益 + 单调性 + 结论。
 
     Args:
         expected_sign: 该因子被假定的方向（``+1`` = 越大越好）。为负时，
             IC 为负会被判为「方向相反」而不是「可用」。
+        walk_forward: ``walk_forward_factor`` 的逐折结果。传入后样本外同号折数
+            会参与 verdict（必要条件）；不传则 verdict 只由 IC/IR/单调性决定。
     """
     ic = ic_series(panel, factor_col, return_col, date_col=date_col, min_names=min_names)
     stats = ic_stats(ic)
     qret = quantile_returns(panel, factor_col, return_col,
                             n_quantiles=n_quantiles, date_col=date_col)
     mono = quantile_monotonicity(qret)
+    wf = walk_forward_summary(walk_forward) if walk_forward is not None else None
     n_obs = 0
     if panel is not None and len(panel) and factor_col in panel.columns:
         n_obs = int(np.isfinite(pd.to_numeric(panel[factor_col], errors="coerce")).sum())
@@ -375,7 +448,8 @@ def validate_factor(
         "ic": stats,
         "quantiles": qret.to_dict("records"),
         "monotonicity": mono,
-        "verdict": _verdict(stats, mono, expected_sign=expected_sign),
+        "walk_forward": wf,
+        "verdict": _verdict(stats, mono, expected_sign=expected_sign, walk_forward=wf),
     }
 
 
@@ -387,6 +461,8 @@ def validate_factors(
     n_quantiles: int = 5,
     date_col: str = "date",
     min_names: int = _MIN_NAMES,
+    walk_forward: bool = True,
+    n_splits: int = 5,
 ) -> pd.DataFrame:
     """多因子批量体检，按 |IC 均值| 降序返回汇总表。
 
@@ -396,6 +472,10 @@ def validate_factors(
     ``np.asarray(..., dtype=float)``，直接抛 ``ValueError`` 让整轮验证失败。
     显式传入 ``factor_cols`` 时若含非数值列，则抛出明确的类型错误（不静默跳过，
     因为那时是调用方写错了列名）。
+
+    ``walk_forward=True``（默认）时为每个因子计算滚动前瞻，让「样本外是否同号」
+    参与 verdict —— 与 ``examples/validate_factors.py`` 的明细口径保持一致，
+    避免「汇总表说可用、明细表说样本外没延续」这种自相矛盾。
     """
     if factor_cols:
         cols = list(factor_cols)
@@ -413,9 +493,15 @@ def validate_factors(
                 and pd.api.types.is_numeric_dtype(panel[c])]
     rows = []
     for c in cols:
+        wf = (walk_forward_factor(panel, c, return_col, n_splits=n_splits,
+                                  n_quantiles=n_quantiles, date_col=date_col,
+                                  min_names=min_names)
+              if walk_forward else None)
         rep = validate_factor(panel, c, return_col, n_quantiles=n_quantiles,
-                              date_col=date_col, min_names=min_names)
+                              date_col=date_col, min_names=min_names,
+                              walk_forward=wf)
         s, m = rep["ic"], rep["monotonicity"]
+        wfs = rep.get("walk_forward") or {}
         rows.append({
             "factor": c,
             "n_obs": rep["n_obs"],
@@ -426,6 +512,8 @@ def validate_factors(
             "ic_win_rate": s["ic_win_rate"],
             "top_minus_bottom": m["top_minus_bottom"],
             "monotone": m["monotone_up"] or m["monotone_down"],
+            "wf_kept": (f"{wfs.get('n_sign_kept', 0)}/{wfs.get('n_folds', 0)}"
+                        if wfs.get("n_folds") else ""),
             "verdict": rep["verdict"],
         })
     df = pd.DataFrame(rows)

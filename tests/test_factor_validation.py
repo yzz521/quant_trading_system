@@ -21,6 +21,7 @@ from quant_trading_system.stock_analysis.research import (
     validate_factor,
     validate_factors,
     walk_forward_factor,
+    walk_forward_summary,
 )
 from quant_trading_system.stock_analysis.research.factor_validation import (
     _MIN_PERIODS,
@@ -733,3 +734,86 @@ class TestQuantileMonotonicityInversions:
     def test_empty_returns_none_inversions(self):
         m = quantile_monotonicity(pd.DataFrame({"quantile": [], "mean_return": []}))
         assert m["n_inversions"] is None
+
+
+# --------------------------------------------------------------------------- #
+# 样本外稳健性门槛（2026-10 裁决：由「仅报告」升级为 verdict 的必要条件）
+#
+# 条件②要求「可用因子符号稳定」。全样本 IC 为正不代表样本外仍为正 ——
+# 「符号稳定」只能由滚动前瞻回答。原实现里 walk_forward_factor 的结果只写进报告、
+# 从不参与判定，等于让这条要求形同虚设。
+#
+# 门槛：折数 ≥ _WF_MIN_FOLDS 时，同号折占比需 ≥ 75%（4 折 ⇒ 至少 3 折同号）；
+# 折数不足时**不启用**（「没测出来」≠「测出来不稳」，不能拿样本不足当反对票）。
+# --------------------------------------------------------------------------- #
+class TestWalkForwardGate:
+    def test_without_walk_forward_behaviour_is_unchanged(self):
+        """向后兼容：不传 walk_forward 时判定与旧口径完全一致。"""
+        assert _verdict(_stats(ic=0.15, ic_std=0.25), _mono(1, 0.7)).startswith("可用")
+        assert "不单调" in _verdict(_stats(ic=0.15, ic_std=0.25), _mono(2, 0.9))
+
+    def test_two_of_four_folds_downgrades_to_unstable(self):
+        """IC/IR/单调性全达标，但样本外只有 2/4 折同号 → 不判可用。"""
+        v = _verdict(_stats(ic=0.15, ic_std=0.25), _mono(1, 0.7),
+                     walk_forward={"n_folds": 4, "n_sign_kept": 2})
+        assert "可用" not in v
+        assert "样本外不稳健" in v
+        assert classify_verdict(v) == "unstable"
+        assert multiplier_for(v) == 0.5
+
+    def test_three_of_four_folds_is_usable(self):
+        """4 折里 3 折同号 = 恰好达到 75% 门槛 → 可用。"""
+        v = _verdict(_stats(ic=0.15, ic_std=0.25), _mono(1, 0.7),
+                     walk_forward={"n_folds": 4, "n_sign_kept": 3})
+        assert v.startswith("可用")
+
+    def test_two_of_three_folds_is_not_enough(self):
+        """3 折里 2 折 = 66.7% < 75% → 不达标（门槛按折数向上取整）。"""
+        v = _verdict(_stats(ic=0.15, ic_std=0.25), _mono(0, 1.0, up=True),
+                     walk_forward={"n_folds": 3, "n_sign_kept": 2})
+        assert "样本外不稳健" in v
+
+    def test_too_few_folds_does_not_penalise(self):
+        """折数不足 → 门槛不启用（与「样本不足不惩罚」同一原则）。"""
+        v = _verdict(_stats(ic=0.15, ic_std=0.25), _mono(1, 0.7),
+                     walk_forward={"n_folds": 2, "n_sign_kept": 0})
+        assert v.startswith("可用")
+
+    def test_walk_forward_does_not_rescue_failing_factor(self):
+        """样本外达标也不能救一个 IC/单调性本身不达标的因子（判定顺序不可颠倒）。"""
+        v = _verdict(_stats(ic=0.15, ic_std=0.25), _mono(3, 0.9),
+                     walk_forward={"n_folds": 4, "n_sign_kept": 4})
+        assert "不单调" in v
+
+    def test_summary_counts_kept_folds(self):
+        wf = pd.DataFrame({"fold": [1, 2, 3, 4],
+                           "sign_kept": [True, False, True, True]})
+        s = walk_forward_summary(wf)
+        assert s == {"n_folds": 4, "n_sign_kept": 3, "kept_ratio": 0.75}
+
+    def test_summary_of_empty_is_zero(self):
+        assert walk_forward_summary(pd.DataFrame())["n_folds"] == 0
+
+    def test_validate_factor_accepts_walk_forward(self):
+        """``validate_factor`` 传入滚动前瞻后，verdict 必须反映样本外结果。"""
+        panel = _panel(n_dates=12, n_names=20, signal=5.0, noise=0.5)
+        wf = pd.DataFrame({"fold": [1, 2, 3, 4],
+                           "sign_kept": [False, False, False, False]})
+        rep = validate_factor(panel, "factor", "ret", walk_forward=wf)
+        assert rep["walk_forward"]["n_sign_kept"] == 0
+        assert "样本外不稳健" in rep["verdict"]
+        # 不传时保持旧口径（合成强因子必然可用）
+        assert validate_factor(panel, "factor", "ret")["verdict"].startswith("可用")
+
+    def test_validate_factors_reports_wf_kept_column(self):
+        """批量汇总表必须带 ``wf_kept`` 列，让「样本外几折同号」在报告里可见。"""
+        panel = _panel(n_dates=24, n_names=20, signal=5.0, noise=0.5)
+        out = validate_factors(panel, ["factor"], return_col="ret")
+        assert "wf_kept" in out.columns
+        assert out["wf_kept"].iloc[0] != ""          # 折数足够 → 有值
+        assert out["verdict"].iloc[0].startswith("可用")
+
+    def test_validate_factors_can_skip_walk_forward(self):
+        panel = _panel(n_dates=24, n_names=20, signal=5.0, noise=0.5)
+        out = validate_factors(panel, ["factor"], return_col="ret", walk_forward=False)
+        assert out["wf_kept"].iloc[0] == ""

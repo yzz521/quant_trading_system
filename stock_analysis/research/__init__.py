@@ -19,6 +19,7 @@ from .factor_validation import (
     validate_factor,
     validate_factors,
     walk_forward_factor,
+    walk_forward_summary,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "validate_factor",
     "validate_factors",
     "walk_forward_factor",
+    "walk_forward_summary",
 ]
