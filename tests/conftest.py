@@ -1,6 +1,6 @@
 """Ensure the package is importable as quant_trading_system.* during tests.
 
-Layout: this folder is the package root (contains core/, strategy/, ...).
+Layout: this folder is the package root (main-v3: stock_analysis/, dashboard/, ...).
 Parent directory must be on sys.path so ``import quant_trading_system`` works.
 """
 from __future__ import annotations

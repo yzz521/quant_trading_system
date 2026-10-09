@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quant-trading-system"
-version = "0.1.0"
-description = "Event-driven multi-market quantitative trading framework with A-share personal assistant tools"
+version = "0.3.12"
+description = "Daily research assistant for A-share, Hong Kong and US stocks: screening, 9-factor scoring, trading plans, look-ahead-safe backtests, and AI explanations. Not investment advice."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "yzz521" }]
-keywords = ["quant", "backtest", "trading", "event-driven"]
+keywords = ["quant", "a-shares", "stock-screener", "backtest", "factor-model", "streamlit"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -40,6 +40,7 @@ all = ["quant-trading-system[data,dashboard,gui,dev]"]
 [project.urls]
 Homepage = "https://github.com/yzz521/quant_trading_system"
 Repository = "https://github.com/yzz521/quant_trading_system"
+Releases = "https://github.com/yzz521/quant_trading_system/releases"
 
 [tool.setuptools]
 packages = [
