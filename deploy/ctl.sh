@@ -1,5 +1,8 @@
 #!/bin/bash
-# 量化交易系统 · 后台服务管理脚本 (nohup 方式)
+# 量化交易系统 · 后台服务管理脚本
+#
+# 守护进程由 deploy/spawn.py 拉起（start_new_session=True 脱离父进程组），
+# 不用 `nohup ... &` —— 后者挡不住父 shell 退出时发给进程组的信号。
 #
 # 用法:
 #   ./ctl.sh dashboard                          # 启动持仓管理页面 (简写)
@@ -15,6 +18,7 @@
 #       持仓管理页面端口默认 8502，可用环境变量 PORT 覆盖。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 DIR="$(dirname "$SCRIPT_DIR")"          # 项目根目录
 PORT="${PORT:-8502}"
 mkdir -p "$DIR/results"
@@ -27,21 +31,31 @@ detect_python() {
         echo "$PYTHON_BIN"
         return
     fi
-    # 1) 默认 python3 版本 >= 3.10 则直接用
-    if command -v python3 >/dev/null 2>&1; then
-        if [ "$(python3 -c 'import sys; print(sys.version_info[:2] >= (3, 10))' 2>/dev/null)" = "True" ]; then
-            echo "python3"
-            return
-        fi
+    # 判断解释器是否真能跑本项目。只看版本号会选中「>=3.10 但没装 pandas」的
+    # 另一个 python3（例如各种工具链自带的托管解释器），服务启动后立刻
+    # ModuleNotFoundError: No module named 'pandas' 并静默退出。
+    _usable() {
+        case "$1" in
+            */*) [ -x "$1" ] || return 1 ;;
+            *)   command -v "$1" >/dev/null 2>&1 || return 1 ;;
+        esac
+        "$1" -c 'import sys, pandas; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' \
+            >/dev/null 2>&1
+    }
+    # 1) 项目虚拟环境优先 —— 本项目依赖都装在这里
+    if _usable "$DIR/.venv/bin/python"; then
+        echo "$DIR/.venv/bin/python"
+        return
     fi
-    # 2) 常见本机环境兜底（$HOME 展开，不泄露具体用户名）
-    for cand in "$DIR/.venv/bin/python" \
+    # 2) 其它候选兜底（$HOME 展开，不泄露具体用户名）
+    for cand in python3 \
                 "$HOME/.workbuddy/binaries/python/envs/default/bin/python"; do
-        if [ -x "$cand" ]; then
+        if _usable "$cand"; then
             echo "$cand"
             return
         fi
     done
+    # 3) 都不行时原样返回，让启动日志把真实错误暴露出来
     echo "python3"
 }
 PY="$(detect_python)"
@@ -61,9 +75,13 @@ manage() {
                 return 0
             fi
             cd "$DIR" || exit 1
+            # 用 spawn.py 而不是 `nohup ... &`：nohup 只挡 SIGHUP，挡不住
+            # 「父 shell 退出时发给整个进程组的信号」，守护进程会被连带杀掉
+            # （实测：启动日志正常、随后进程消失、exit code 137）。
+            # spawn.py 用 start_new_session=True 彻底脱离进程组。
+            # $start_cmd 故意不加引号以按空格分词（项目路径不含空格）。
             # shellcheck disable=SC2086
-            nohup $start_cmd > "$logfile" 2>&1 &
-            echo $! > "$pidfile"
+            "$PY" "$SCRIPT_DIR/spawn.py" "$pidfile" "$logfile" $start_cmd
             sleep 2
             if is_running; then
                 echo "✅ $name 已启动 PID=$(cat "$pidfile")"
@@ -96,9 +114,12 @@ manage() {
             tail -f "$logfile"
             ;;
         restart)
-            "$0" "$1" stop
+            # 用 `bash "$SELF"` 而非 `"$0"`：脚本可能没有执行权限（仓库里
+            # 就是 644），直接 exec 会 Permission denied；且 `bash script`
+            # 不依赖 x 位，是最稳的自我调用方式。
+            bash "$SELF" "$1" stop
             sleep 1
-            "$0" "$1" start
+            bash "$SELF" "$1" start
             ;;
         *)
             echo "用法: ./ctl.sh $1 {start|stop|status|log|restart}"

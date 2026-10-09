@@ -14,6 +14,30 @@ import pandas as pd
 
 from .support_resistance import SupportResistance, detect_support_resistance
 
+#: 止损距离不得小于 ``n × ATR``。
+#:
+#: 原实现 ``stop = max(candidates)`` 取「最接近现价」的一档，即**最紧**的止损。
+#: 这看起来最保守（每股亏损最小），实际是把止损塞进日内噪声里 —— 一天的平均波动
+#: （ATR）就能扫掉它，而赔率因为分母被压小反而显得漂亮。审计实测「高 RR 组
+#: 97.1% 止损离场」正是这个症状。取 0.5×ATR 作为下限：仍允许比固定 7% 更紧，
+#: 但不再紧到「一个日内波动就出局」。
+MIN_STOP_ATR_MULT = 0.5
+
+
+#: 第一目标价相对入场价的波动率上限（``entry + n × ATR``）。
+#:
+#: ``t1`` 的候选里有 ``prev_high``（近 120 日最高价）。对一只已从高位跌下来的股票，
+#: 这个"前高"可以远在现价之上 —— 实测华工科技（现价 86.99）的 T1 被设成 187.66
+#: （+108%，≈18×ATR），立讯精密 +66.8%（≈16×ATR）。这类目标不是"第一目标"，
+#: 而是长期阻力位；它唯一的效果是把 RR 抬到 15.42 / 10.49，让计划**白过**
+#: ``min_rr=2.0`` 的闸门 —— 与「止损贴着入场价」是同一个套路的镜像。
+#:
+#: 取 6 的理由：计划书写明持有期「5~20 个交易日」，随机游走下 20 日的期望位移
+#: ≈ ``ATR × √20 ≈ 4.5×ATR``，6 倍留约 1.3 倍余量。按波动率缩放，而不是拍一个
+#: 固定百分比 —— 高波动票本来就该允许更远的绝对目标。
+#: 实测该阈值恰好只拦掉上述 2 只病态样本，对其余 38 只（最高 4.5×ATR）零影响。
+MAX_T1_ATR_MULT = 6.0
+
 
 @dataclass
 class ExitPrice:
@@ -59,6 +83,8 @@ def calc_exit_prices(
     sr: Optional[SupportResistance] = None,
     atr_mult_stop: float = 1.5,
     fixed_risk_pct: float = 0.07,
+    min_stop_atr_mult: float = MIN_STOP_ATR_MULT,
+    max_t1_atr_mult: float = MAX_T1_ATR_MULT,
 ) -> ExitPrice:
     """计算止损与三档目标价。
 
@@ -68,6 +94,10 @@ def calc_exit_prices(
         sr: 支撑/阻力结果。
         atr_mult_stop: ATR 止损倍数（ATR 止损 = 现价 - n*ATR）。
         fixed_risk_pct: 固定风险止损比例（相对于入场价）。
+        min_stop_atr_mult: 止损距离的 ATR 倍数下限（0 表示不启用）。
+            宽度上限受 ``fixed_risk_pct`` 约束 —— 不会因为 ATR 很大就把风险
+            放大到超过固定风险比例。
+        max_t1_atr_mult: 第一目标距入场价的 ATR 倍数上限（0 表示不启用）。
     """
     if df is None or df.empty:
         return ExitPrice()
@@ -99,8 +129,15 @@ def calc_exit_prices(
 
     if not candidates:
         return ExitPrice()
-    # 取最高（最接近现价 → 最保守）的一档，再向下取整到分
+    # 取最高（最接近现价 → 每股亏损最小）的一档，再向下取整到分
     stop_raw, stop_src = max(candidates, key=lambda c: c[0])
+    # 止损距离下限：不得小于 min_stop_atr_mult × ATR（否则止损落在日内噪声里）。
+    # 用 max(..., 固定风险止损) 兜住 —— 不允许 ATR 很大时把风险撑过 fixed_risk_pct。
+    if atr and atr > 0 and min_stop_atr_mult > 0:
+        floor_stop = max(entry - min_stop_atr_mult * atr, entry * (1 - fixed_risk_pct))
+        if stop_raw > floor_stop:
+            stop_raw = floor_stop
+            stop_src = f"ATR下限({min_stop_atr_mult:g}×ATR)"
     stop_loss = round(stop_raw, 2)
     # 避免止损 == 入场价
     if stop_loss >= entry:
@@ -127,6 +164,12 @@ def calc_exit_prices(
     else:
         t1 = entry + 2.0 * risk
         t1_src = "2R目标"
+    # 目标必须落在「持有期内可能走到」的范围内（按波动率缩放，见 MAX_T1_ATR_MULT）
+    if atr and atr > 0 and max_t1_atr_mult > 0:
+        cap = entry + max_t1_atr_mult * atr
+        if t1 > cap:
+            t1 = cap
+            t1_src = f"{t1_src}（受 {max_t1_atr_mult:g}×ATR 上限约束）"
     target_1 = round(t1, 2)
 
     # T2: 3.5R 或 1.6×T1

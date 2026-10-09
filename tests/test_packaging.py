@@ -29,10 +29,14 @@ def test_wheel_includes_stock_analysis_subpackages(tmp_path):
         "quant_trading_system/stock_analysis/scoring/",
         "quant_trading_system/stock_analysis/ai/",
         "quant_trading_system/stock_analysis/backtest/",
+        "quant_trading_system/stock_analysis/realtime.py",
+        "quant_trading_system/stock_analysis/scheduler.py",
+        "quant_trading_system/stock_analysis/paper_tracking.py",
         "quant_trading_system/dashboard/home.py",
         "quant_trading_system/dashboard/pages/0_opportunity.py",
         "quant_trading_system/dashboard/pages/1_holdings.py",
         "quant_trading_system/dashboard/pages/2_settings.py",
+        "quant_trading_system/dashboard/pages/3_factors.py",
     )
     for prefix in required_prefixes:
         assert any(n.startswith(prefix) or n == prefix for n in names), f"missing in wheel: {prefix}"

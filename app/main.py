@@ -380,6 +380,40 @@ class DashboardServer:
             log.info("看板子进程已停止")
 
 
+class RealtimeThread(threading.Thread):
+    """后台线程运行实时盯盘（快轨，notify.yaml → realtime.enabled 控制）。
+
+    快轨与上面的每日调度「慢轨」互不干扰：慢轨 30~60 分钟一轮跑全市场扫描，
+    快轨只盯持仓/自选、盘中秒级轮询、命中规则才推。
+
+    ``realtime.enabled=false`` 时**常驻待命**而不是退出：``run_forever`` 会每轮
+    重读配置，所以在配置页打开开关保存后最迟一个空闲间隔就自动开始盯，不必重启
+    应用。原实现直接 ``return``，线程一启动就结束 —— 页面上写着"下次轮询即生效"，
+    实际必须重启进程，是最容易被当成"功能坏了"的那种不一致。
+    """
+
+    def __init__(self, config_path: Path) -> None:
+        super().__init__(daemon=True, name="realtime")
+        self.config_path = config_path
+        self._stop_event = threading.Event()
+
+    def run(self) -> None:
+        if not getattr(sys, "frozen", False):
+            sys.path.insert(0, str(BASE.parent))
+        try:
+            from quant_trading_system.stock_analysis.realtime import RealtimeWatcher
+
+            # 把线程的停止事件注入 watcher，stop() 能直接打断循环里的 sleep
+            watcher = RealtimeWatcher(str(self.config_path), stop_event=self._stop_event)
+            # 不在这里判断 enabled：run_forever 自身处理「待命 + 动态生效」
+            watcher.run_forever()
+        except Exception as e:  # noqa: BLE001
+            log.error("实时盯盘启动失败: %s", e)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
 class SchedulerThread(threading.Thread):
     """后台线程运行每日邮件调度器（开窗即调度，关窗即停）。"""
 
@@ -485,6 +519,9 @@ def main() -> None:
     config_path = DATA_DIR / "notify.yaml"
     scheduler = SchedulerThread(config_path)
     scheduler.start()
+    # 快轨：实时盯盘（持仓/自选）。默认 realtime.enabled=false 时线程自行退出
+    realtime = RealtimeThread(config_path)
+    realtime.start()
 
     if not _wait_port(port):
         log.error("看板服务未就绪，退出")
@@ -511,6 +548,7 @@ def main() -> None:
 
     def on_closed() -> None:
         log.info("窗口关闭，停止后台服务")
+        realtime.stop()
         scheduler.stop()
         dashboard.stop()
 
@@ -522,6 +560,7 @@ def main() -> None:
             webview.start()
     except Exception as e:  # noqa: BLE001
         log.exception("桌面窗口启动失败")
+        realtime.stop()
         dashboard.stop()
         scheduler.stop()
         _alert(

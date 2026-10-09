@@ -270,6 +270,7 @@ hiddenimports += [
     "quant_trading_system.stock_analysis.sell_zone",
     "quant_trading_system.stock_analysis.holdings_action",
     "quant_trading_system.stock_analysis.trade_monitor",
+    "quant_trading_system.stock_analysis.realtime",
     "quant_trading_system.stock_analysis.indicators",
     "quant_trading_system.stock_analysis.ai_client",
     "quant_trading_system.stock_analysis.ai.ai_analyst",

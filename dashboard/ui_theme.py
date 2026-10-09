@@ -268,6 +268,27 @@ footer { visibility: hidden; }
   color: #f87171;
 }
 .qts-scan.err::after { display: none; }
+
+/* 快轨（实时盯盘）运行状态条：所有主页面顶部共用，一眼看出"在不在跑" */
+.qts-rt {
+  display: flex; align-items: center; gap: .45rem;
+  margin: 0 0 .85rem; padding: .35rem .7rem;
+  border-radius: 10px; font-size: .78rem; color: #8b9bb8;
+  border: 1px solid rgba(139,155,184,.22);
+  background: rgba(10,15,28,.55);
+}
+.qts-rt .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: #5a6480;
+}
+.qts-rt .k { color: #e8f1ff; font-weight: 600; }
+.qts-rt .sep { color: rgba(139,155,184,.5); }
+.qts-rt.ok { border-color: rgba(0,224,138,.34); background: rgba(0,224,138,.07); }
+.qts-rt.ok .dot { background: #00e08a; box-shadow: 0 0 8px rgba(0,224,138,.8); }
+.qts-rt.warn { border-color: rgba(255,176,32,.34); background: rgba(255,176,32,.07); }
+.qts-rt.warn .dot { background: #ffb020; }
+.qts-rt.bad { border-color: rgba(255,77,109,.4); background: rgba(255,77,109,.09); }
+.qts-rt.bad .dot { background: #ff4d6d; box-shadow: 0 0 8px rgba(255,77,109,.7); }
 </style>
 """
 

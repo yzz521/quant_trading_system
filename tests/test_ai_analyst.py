@@ -105,8 +105,63 @@ class TestExplainPlan:
 
         monkeypatch.setattr(mod, "chat_completion", fake_chat)
         text = explain_plan(_plan(), notify_cfg=cfg)
-        assert text == "AI 解读内容"
+        assert text.startswith("AI 解读内容")
+        assert "免责声明" in text            # 合规：AI 文案也必须带免责声明
         assert called["n"] == 2
+
+    def test_llm_text_with_invented_price_is_rejected(self, monkeypatch):
+        """AI 编造计划里没有的目标价 → 丢弃 AI 文案，回退规则化解读。"""
+        cfg = {"ai": {"enabled": True, "api_key": "sk-test", "model": "m",
+                      "base_url": "https://x", "timeout": 1, "max_tokens": 100,
+                      "temperature": 0.2}}
+        import quant_trading_system.stock_analysis.ai.ai_analyst as mod
+
+        monkeypatch.setattr(
+            mod, "chat_completion",
+            lambda *a, **kw: "## 入场逻辑\n目标价 15.80 元，止损 9.90 元。")  # 15.80 不在计划里
+        text = explain_plan(_plan(), notify_cfg=cfg)
+        assert "15.80" not in text
+        assert "已进入入场区间" in text          # 回退到兜底
+        assert "免责声明" in text
+
+    def test_llm_text_contradicting_decision_is_rejected(self, monkeypatch):
+        cfg = {"ai": {"enabled": True, "api_key": "sk-test", "model": "m",
+                      "base_url": "https://x", "timeout": 1, "max_tokens": 100,
+                      "temperature": 0.2}}
+        import quant_trading_system.stock_analysis.ai.ai_analyst as mod
+
+        monkeypatch.setattr(mod, "chat_completion",
+                            lambda *a, **kw: "## 现在能不能买\n建议立即买入。")
+        text = explain_plan(_plan(decision=DecisionState.WATCH), notify_cfg=cfg)
+        assert "建议立即买入" not in text
+        assert "观察" in text                    # 回退到兜底
+
+    def test_llm_text_passing_review_is_kept(self, monkeypatch):
+        cfg = {"ai": {"enabled": True, "api_key": "sk-test", "model": "m",
+                      "base_url": "https://x", "timeout": 1, "max_tokens": 100,
+                      "temperature": 0.2}}
+        import quant_trading_system.stock_analysis.ai.ai_analyst as mod
+
+        monkeypatch.setattr(
+            mod, "chat_completion",
+            lambda *a, **kw: "## 入场逻辑\n现价 12.00 已进入 11.80~12.10 区间，止损 11.35。")
+        text = explain_plan(_plan(), notify_cfg=cfg)
+        assert "11.80~12.10" in text
+
+    def test_explain_plan_with_review_exposes_verdict(self, monkeypatch):
+        from quant_trading_system.stock_analysis.ai import explain_plan_with_review
+
+        cfg = {"ai": {"enabled": True, "api_key": "sk-test", "model": "m",
+                      "base_url": "https://x", "timeout": 1, "max_tokens": 100,
+                      "temperature": 0.2}}
+        import quant_trading_system.stock_analysis.ai.ai_analyst as mod
+
+        monkeypatch.setattr(mod, "chat_completion",
+                            lambda *a, **kw: "目标价 99.99 元")
+        text, review = explain_plan_with_review(_plan(), notify_cfg=cfg)
+        assert review is not None and review.passed is False
+        assert review.invented_prices
+        assert "99.99" not in text
 
     def test_llm_failure_falls_back(self, monkeypatch):
         cfg = {"ai": {"enabled": True, "api_key": "sk-test", "model": "m", "base_url": "https://x", "timeout": 1, "max_tokens": 100, "temperature": 0.2}}
@@ -115,3 +170,4 @@ class TestExplainPlan:
         monkeypatch.setattr(mod, "chat_completion", lambda *a, **kw: None)
         text = explain_plan(_plan(), notify_cfg=cfg)
         assert "已进入入场区间" in text  # 回退兜底
+        assert "免责声明" in text

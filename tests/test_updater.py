@@ -1,8 +1,6 @@
 """Planned capital gate and GitHub in-app updater helpers."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from quant_trading_system.dashboard.capital import planned_capital, save_planned_capital
 from quant_trading_system.utils.updater import (
     expected_asset_name,
@@ -80,9 +78,10 @@ def test_latest_tag_from_url_and_atom():
 
 
 def test_http_error_text_rate_limit():
+    import urllib.error
     from email.message import Message
     from io import BytesIO
-    import urllib.error
+
     from quant_trading_system.utils.updater import _http_error_text
 
     hdrs = Message()
@@ -98,9 +97,10 @@ def test_http_error_text_rate_limit():
 
 
 def test_check_latest_falls_back_when_api_rate_limited(monkeypatch):
+    import urllib.error
     from email.message import Message
     from io import BytesIO
-    import urllib.error
+
     from quant_trading_system.utils import updater
 
     class _Html:

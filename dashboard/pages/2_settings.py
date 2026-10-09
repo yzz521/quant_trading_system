@@ -305,6 +305,192 @@ if test_clicked:
             st.error(f"发送失败：{e}")
 
 # --------------------------------------------------------------------------- #
+class _NoNotifier:
+    """状态查询不推送。哨兵对象避免每次页面刷新都重建 Notifier（会刷日志）。"""
+
+    def send(self, *a, **k):  # pragma: no cover - 永不调用
+        return {}
+
+
+with st.expander("实时盯盘（快轨）"):
+    st.caption(
+        "独立的秒级盯盘通道：只盯持仓/自选，命中规则才推。"
+        "上面的「调度频率」负责每 30~60 分钟的全市场选股，这里负责「现在要不要动手」，两者互不干扰。"
+    )
+
+    # ---- 运行状态：第一眼就要能看出"它到底有没有在跑" ----
+    # 快轨无事发生时是静默的，只看开关状态会把"已启用但线程根本没起来"误判成正常
+    st.markdown("**运行状态**")
+    try:
+        from quant_trading_system.stock_analysis.realtime import RealtimeWatcher as _RW
+
+        _s = _RW(CFG_PATH, notifier=_NoNotifier()).status()
+        if not _s["enabled"]:
+            st.warning(
+                "未启用。打开下面的开关并保存后，"
+                "**需重启 GP助手**（或重启单独运行的盯盘命令）才会拉起盯盘线程。"
+            )
+        elif not _s["heartbeat"]:
+            st.error(
+                "从未运行过：配置已启用，但没有任何心跳记录 —— 盯盘线程没有被拉起。\n\n"
+                "快轨由 GP助手 主程序（`app/main.py` → `RealtimeThread`）启动；"
+                "只单独运行看板不会启动它。也可以单独跑：\n\n"
+                "`python examples/run_realtime.py`"
+            )
+        elif _s["alive"]:
+            st.success("运行中 —— 心跳正常，正在实时盯盘。")
+        else:
+            _age = float(_s["heartbeat_age_sec"] or 0)
+            st.error(
+                f"已停摆 —— 最近一轮在 {_s['heartbeat']}"
+                f"（{_age / 60:.1f} 分钟前，超过 {_s['stale_after_sec'] / 60:.0f} 分钟未更新）。"
+                "请检查 GP助手 是否还在运行。"
+            )
+
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("最近一轮", (_s["heartbeat"] or "—")[11:19] or "—")
+        _m2.metric("今日轮数", _s["rounds"])
+        _m3.metric("盯盘清单", f"{_s['watch_count']} 只")
+        _m4.metric("最近推送", (_s["last_push_at"] or "—")[11:19] or "—")
+        st.caption(
+            f"轮询：盘中 {_s['interval']}s / 空闲 {_s['idle_interval']}s · "
+            f"{'开市中 ' + '/'.join(_s['open_markets']) if _s['in_session'] else '当前休市'}"
+            f"（休市时仍会按空闲间隔记账，心跳照常）· 状态文件 {_s['state_path']}"
+        )
+        if _s["heartbeat"]:
+            st.caption(
+                f"最近一轮：清单 {_s['last_targets']} 只 · 取到价 {_s['last_quotes']} 只 · "
+                f"命中规则 {_s['last_alerts']} 条"
+                + (f" · 上次推送 {_s['last_push_n']} 条" if _s["last_push_n"] else "")
+            )
+        st.caption(
+            "看不到心跳时按顺序查：① 盯盘进程是否在运行（GP助手 主程序，或单独跑的 "
+            "`examples/run_realtime.py`）② 下方开关是否已保存 ③ 状态文件路径是否存在。"
+        )
+
+    except Exception as e:  # noqa: BLE001
+        st.caption(f"状态读取失败：{e}")
+
+    rt_cfg = cfg.get("realtime") or {}
+    rt_rules = rt_cfg.get("rules") or {}
+    rt_on = st.toggle(
+        "启用实时盯盘",
+        value=bool(rt_cfg.get("enabled", False)),
+        key="rt_on",
+        help="关闭时不产生任何行情请求，系统行为与未开启时完全一致。",
+    )
+    rc1, rc2, rc3 = st.columns(3)
+    rt_interval = int(rc1.number_input(
+        "盘中轮询（秒）", value=int(rt_cfg.get("interval_sec") or 5), min_value=1, max_value=60, key="rt_iv"))
+    rt_idle = int(rc2.number_input(
+        "午休/休市轮询（秒）", value=int(rt_cfg.get("idle_interval_sec") or 60),
+        min_value=10, max_value=600, step=10, key="rt_idle"))
+    rt_cool = int(rc3.number_input(
+        "同规则冷却（分钟）", value=int(rt_cfg.get("cooldown_min") or 30),
+        min_value=1, max_value=240, step=5, key="rt_cool",
+        help="同一只票同一条规则在冷却期内只推一次，是防刷屏最关键的一项。"))
+
+    _mode_labels = {"holdings": "只盯持仓", "watchlist": "只盯自选",
+                    "both": "持仓 + 自选", "pool": "回退股票池"}
+    _mode_keys = list(_mode_labels)
+    _mode_now = str(rt_cfg.get("watch_mode") or "holdings")
+    rt_mode = st.selectbox(
+        "盯盘范围", _mode_keys,
+        index=_mode_keys.index(_mode_now) if _mode_now in _mode_keys else 0,
+        format_func=lambda k: _mode_labels[k], key="rt_mode")
+    _watch_now = rt_cfg.get("watchlist") or []
+    rt_watch = st.text_input(
+        "额外自选（逗号分隔代码）",
+        value=", ".join(str(x) for x in _watch_now), key="rt_watch",
+        help="仅在盯盘范围含「自选」时生效，如 513310, 159558")
+    rt_levels = st.toggle(
+        "自动取关键位（止损位 / 卖出区间下沿）",
+        value=bool(rt_cfg.get("levels_from_cache", False)), key="rt_levels",
+        help="从当日持仓量化结果读取，穿越时预警；上面手写的价位会覆盖它。"
+             "只认当天结果，昨日价位不参与。")
+
+    st.caption("预警规则与阈值")
+    _pct = rt_rules.get("pct_change") or {}
+    r1, r2, r3 = st.columns(3)
+    pc_on = r1.checkbox("涨跌幅异动", value=bool(_pct.get("enabled", True)), key="rt_pct_on")
+    pc_stock = r2.number_input("个股 ±%", value=float(_pct.get("cn_stock") or 4.0),
+                               min_value=0.5, max_value=20.0, step=0.5, key="rt_pct_stock")
+    pc_etf = r3.number_input("ETF ±%", value=float(_pct.get("cn_etf") or 2.0),
+                             min_value=0.5, max_value=20.0, step=0.5, key="rt_pct_etf",
+                             help="ETF 波动天然小于个股，阈值要单独放宽口径。")
+
+    _spd = rt_rules.get("speed") or {}
+    r4, r5, r6 = st.columns(3)
+    sp_on = r4.checkbox("急拉 / 急杀", value=bool(_spd.get("enabled", True)), key="rt_sp_on")
+    sp_win = r5.number_input("窗口（分钟）", value=int(_spd.get("window_min") or 3),
+                             min_value=1, max_value=30, key="rt_sp_win")
+    sp_pct = r6.number_input("幅度 ±%", value=float(_spd.get("pct") or 1.0),
+                             min_value=0.1, max_value=10.0, step=0.1, key="rt_sp_pct")
+
+    _sl = rt_rules.get("stop_loss") or {}
+    _tp = rt_rules.get("take_profit") or {}
+    r7, r8, r9, r10 = st.columns(4)
+    sl_on = r7.checkbox("成本止损", value=bool(_sl.get("enabled", True)), key="rt_sl_on")
+    sl_pct = r8.number_input("止损 %", value=float(_sl.get("pct") if _sl.get("pct") is not None else -8.0),
+                             min_value=-50.0, max_value=-1.0, step=0.5, key="rt_sl_pct")
+    tp_on = r9.checkbox("成本止盈", value=bool(_tp.get("enabled", True)), key="rt_tp_on")
+    tp_pct = r10.number_input("止盈 %", value=float(_tp.get("pct") or 15.0),
+                              min_value=1.0, max_value=200.0, step=1.0, key="rt_tp_pct")
+
+    _ts = rt_rules.get("turnover_surge") or {}
+    r11, r12 = st.columns(2)
+    ts_on = r11.checkbox("换手率异动", value=bool(_ts.get("enabled", False)), key="rt_ts_on")
+    ts_pct = r12.number_input("换手率 %", value=float(_ts.get("pct") or 10.0),
+                              min_value=1.0, max_value=50.0, step=1.0, key="rt_ts_pct")
+
+    _rt_payload = {
+        "enabled": bool(rt_on),
+        "interval_sec": int(rt_interval),
+        "idle_interval_sec": int(rt_idle),
+        "cooldown_min": int(rt_cool),
+        "watch_mode": rt_mode,
+        "watchlist": parse_code_list(rt_watch),
+        "levels_from_cache": bool(rt_levels),
+        "rules": {
+            "pct_change": {"enabled": bool(pc_on), "cn_stock": float(pc_stock), "cn_etf": float(pc_etf)},
+            "speed": {"enabled": bool(sp_on), "window_min": int(sp_win), "pct": float(sp_pct)},
+            "stop_loss": {"enabled": bool(sl_on), "pct": float(sl_pct)},
+            "take_profit": {"enabled": bool(tp_on), "pct": float(tp_pct)},
+            "turnover_surge": {"enabled": bool(ts_on), "pct": float(ts_pct)},
+        },
+    }
+    rs1, rs2 = st.columns(2)
+    rt_saved = rs1.button("保存实时盯盘设置", type="primary", use_container_width=True, key="rt_save")
+    rt_probe = rs2.button("试跑一轮（只打印，不推送）", use_container_width=True, key="rt_probe")
+
+    if rt_saved:
+        save_app_config(CFG_PATH, {"realtime": _rt_payload})
+        st.success("已保存。定时邮件下一轮生效；实时盯盘下次轮询即生效。")
+        st.rerun()
+
+    if rt_probe:
+        from quant_trading_system.stock_analysis.realtime import RealtimeWatcher
+
+        try:
+            # 把屏幕上**当前**的设置覆盖进去试跑，不必先保存就能验证；
+            # dry_run 不推送也不写状态，探测不会污染正式盯盘的冷却/前值
+            _w = RealtimeWatcher(str(CFG_PATH), dry_run=True, overrides={"realtime": _rt_payload})
+            st.caption(_w.describe())
+            _hits = _w.tick(force=True)
+            if _hits:
+                _sev = {1: "立即处理", 2: "提示", 3: "资讯"}
+                st.dataframe(
+                    [{"级别": _sev.get(a.severity, ""), "标的": f"{a.name}({a.code})",
+                      "信号": a.title, "说明": a.detail} for a in _hits],
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("本轮没有告警 —— 阈值未触发即属正常，不代表规则没生效。")
+            st.caption("试跑不推送、不写状态，不会影响后续正式盯盘。")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"试跑失败：{e}")
+
+# --------------------------------------------------------------------------- #
 with st.expander("AI 解读（可选）"):
     ai_on = st.toggle("启用 AI 解读", value=bool(ai_cfg.get("enabled")), key="ai_on")
     ai_key = st.text_input(

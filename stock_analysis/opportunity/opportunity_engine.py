@@ -10,16 +10,54 @@ from typing import Optional
 
 import pandas as pd
 
+from ..calibration import Calibrator
 from ..indicators import rate_signals
 from ..patterns import pattern_score, recent_pattern_names
 from ..scoring.opportunity_score import OpportunityScore, calc_opportunity_score
 from ..scoring.stock_score import StockScore, calc_stock_score
-from .entry_price import EntryPrice, calc_entry_zone
+from .entry_price import EntryPrice, calc_entry_zone, reconcile_entry_zone
 from .exit_price import ExitPrice, calc_exit_prices
 from .position_sizing import PositionSizing, calc_position_size
-from .risk_reward import RiskReward, calc_risk_reward
+from .quality_gate import QualityGateConfig, compute_coverage
+from .quality_gate import evaluate as evaluate_gate
+from .risk_reward import MIN_RISK_PCT, RiskReward, calc_risk_reward
 from .support_resistance import SupportResistance, detect_support_resistance
 from .trading_plan import TradingPlan, build_trading_plan
+
+
+def _bar_date(df: Optional[pd.DataFrame]) -> str:
+    """取最后一根K线的日期字符串（``YYYY-MM-DD``），取不到返回空串。
+
+    用于给交易计划打上「价格/指标截止到哪一天」的时间戳。原实现完全没有记录
+    数据时点，导致盘中拿未收盘日K当现价、历史回测与实时扫描无法区分。
+    """
+    if df is None or len(df) == 0:
+        return ""
+    try:
+        if "date" in df.columns:
+            return str(pd.to_datetime(df["date"]).iloc[-1])[:10]
+        if isinstance(df.index, pd.DatetimeIndex):
+            return df.index[-1].strftime("%Y-%m-%d")
+    except (ValueError, TypeError, AttributeError, IndexError):
+        pass
+    return ""
+
+
+def _latest_amount(df: Optional[pd.DataFrame], extra: Optional[dict]) -> Optional[float]:
+    """取当日成交额（元）：优先 extra，其次 K 线末根 amount 列。"""
+    if extra and extra.get("amount") is not None:
+        try:
+            v = float(extra["amount"])
+            return None if v != v else v
+        except (TypeError, ValueError):
+            pass
+    if df is not None and "amount" in df.columns and len(df) > 0:
+        try:
+            v = float(pd.to_numeric(df["amount"], errors="coerce").iloc[-1])
+            return None if v != v else v
+        except (TypeError, ValueError, IndexError):
+            return None
+    return None
 
 
 @dataclass
@@ -66,6 +104,8 @@ class OpportunityEngine:
         sector_map: Optional[dict] = None,
         sector_rank: Optional[list] = None,
         fetch_news: bool = False,
+        calibrator: Optional[Calibrator] = None,
+        quality_gate: Optional[QualityGateConfig] = None,
     ) -> None:
         self.account_equity = account_equity
         self.risk_percent = risk_percent
@@ -77,6 +117,13 @@ class OpportunityEngine:
         self.sector_rank = sector_rank or []
         # 仅实时扫描开启。回测必须保持 False，否则会把「今天的公告」套到历史K线上。
         self.fetch_news = fetch_news
+        # 置信度概率标定器（见 stock_analysis.calibration）。None = 不标定，保持
+        # 原有打分语义，因此默认行为与历史完全一致。标定映射单调不减，不改变
+        # 任何排序与决策，只把 confidence 的数值解释从「打分」变成「概率」。
+        self.calibrator = calibrator
+        # 质量闸门：买入状态必须先过质量与数据关卡（见 opportunity/quality_gate.py）。
+        # 默认启用 —— 这正是「推荐看起来很怪」的核心修复点。
+        self.quality_gate = quality_gate if quality_gate is not None else QualityGateConfig()
 
     def analyze(
         self,
@@ -140,6 +187,20 @@ class OpportunityEngine:
             exit_.target_2 or 0,
         )
 
+        # 4b) 几何自洽性：入场区间必须落在「止损之上、目标之下」。
+        # 原实现里区间下沿可以低于止损（实测 57.5%）、上沿可以高于目标（45%）——
+        # 字面意思就是「在止损位下方买入」「买在目标价上方」。这类计划直接作废，
+        # 不给它机会靠分数/赔率混过闸门。
+        entry.low, entry.high, geo_ok, geo_note = reconcile_entry_zone(
+            entry.low,
+            entry.high,
+            stop_loss=exit_.stop_loss,
+            target_1=exit_.target_1,
+            min_risk_pct=MIN_RISK_PCT,
+        )
+        if geo_note:
+            entry.evidence["zone_reconciled"] = geo_note
+
         # 5) 双评分（含 Sector Rotation：板块强度因子）
         stock_sector = (self.sector_map or {}).get(code)
         sector_score = None
@@ -162,11 +223,27 @@ class OpportunityEngine:
             similar_pattern_score=similar_pattern_score,
         )
 
-        # 6) 仓位（AVOID 决策不计算仓位）
+        # 5b) 质量闸门：买入状态必须先过质量与数据关卡（核心修复点）
+        severe_news = bool(getattr(info_snap, "severe", False)) or any(
+            isinstance(it, dict) and it.get("severity") == "severe" for it in (news_risks or [])
+        )
+        gate = evaluate_gate(
+            stock_score=stock_score.total,
+            opportunity_score=opportunity_score.total,
+            risk_reward_1=rr.ratio_1,
+            extra=extra,
+            risk_component=stock_score.components.get("risk"),
+            severe_news=severe_news,
+            amount=_latest_amount(df, extra),
+            config=self.quality_gate,
+        )
+        coverage = gate.coverage or compute_coverage(extra)
+
+        # 6) 仓位（AVOID / 闸门硬否决不计算仓位）
         position = None
         position_percent = None
         avoid = rr.ratio_1 is not None and rr.ratio_1 < 1.5
-        if self.account_equity and not avoid:
+        if self.account_equity and not avoid and geo_ok and gate.tier != "REJECT":
             position = calc_position_size(
                 self.account_equity,
                 entry.standard or cur,
@@ -177,13 +254,21 @@ class OpportunityEngine:
             )
             position_percent = position.position_percent
 
-        # 7) 置信度：由机会分与 RR 融合
+        # 7) 置信度：由机会分与 RR 融合（手工线性加权，单调但未校准）
         confidence = 0.0
         if opportunity_score.total and rr.ratio_1:
             confidence = min(0.98, (opportunity_score.total / 100) * 0.6 + min(rr.ratio_1, 4.0) / 4.0 * 0.4)
         if info_snap and info_snap.severe:
             confidence = min(confidence, confidence * 0.75)
-        confidence = round(confidence, 2)
+        confidence_raw = round(confidence, 2)
+
+        # 7b) 概率标定（可选）：把上面的打分映射为可解释的成功概率。
+        # 标定映射单调不减 → 排序、决策门、仓位全部不变，只有数值语义改变。
+        confidence = confidence_raw
+        if self.calibrator is not None:
+            calibrated = self.calibrator.apply(confidence_raw)
+            if calibrated is not None:
+                confidence = round(calibrated, 2)
 
         # 8) 理由/风险/失效条件
         reasons = self._build_reasons(
@@ -195,6 +280,7 @@ class OpportunityEngine:
             if exit_.stop_loss else ""
         )
 
+        bar_as_of = _bar_date(df)
         plan = build_trading_plan(
             code=code,
             name=name or code,
@@ -209,12 +295,39 @@ class OpportunityEngine:
             reasons=reasons,
             risks=risks,
             invalidate_condition=invalidate,
+            gate=gate,
+            price_as_of=bar_as_of,
+            bar_as_of=bar_as_of,
+            fundamental_as_of=str(extra.get("as_of") or ""),
+            data_coverage=coverage.ratio,
+            geometry_ok=geo_ok,
+            geometry_note=geo_note,
         )
+        # 闸门不通过的原因补进「风险」列表，保证看板/邮件/AI 都能看到
+        if not gate.passed:
+            for msg in gate.reasons:
+                tag = "质量闸门硬否决" if gate.tier == "REJECT" else "质量闸门降级"
+                line = f"{tag}：{msg}"
+                if line not in plan.risks:
+                    plan.risks.append(line)
         # 板块信息写入 meta（供 Dashboard/邮件展示）
         if stock_sector:
             plan.meta["sector"] = stock_sector
             plan.meta["sector_score"] = round(sector_score or 50.0, 1)
         plan.meta["technical"] = tech
+        # 止损候选 / ATR / T1 来源 —— 没有它就只能靠翻代码推断「止损为什么是这个价」
+        if exit_.evidence:
+            plan.meta["stop_evidence"] = exit_.evidence
+        if entry.evidence:
+            plan.meta["entry_evidence"] = entry.evidence
+        # 因缺数据被剔除加权的维度 —— 可观测性：让「为什么这个维度没影响总分」
+        # 能被直接看到，而不是只能靠翻代码推断。
+        gated = list(getattr(stock_score, "gated_dims", None) or [])
+        if gated:
+            plan.meta["stock_gated_dims"] = gated
+        if self.calibrator is not None:
+            # 保留未标定打分，便于对比标定前后、以及发现标定参数失效
+            plan.meta["confidence_raw"] = confidence_raw
         if pattern_names:
             plan.meta["patterns"] = pattern_names
         if sr and sr.evidence.get("fibonacci"):

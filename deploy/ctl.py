@@ -278,6 +278,14 @@ def cmd_start_all(include_scheduler: bool = False) -> None:
     print("\n完成。打开浏览器: http://localhost:%s" % _ports()["dashboard"])
     print("（左侧切换：持仓与卖出 / 个股诊断 / 研究工具）")
     print("快轨是否真的在盯：python deploy/ctl.py realtime status  或看板上方状态条")
+    # 调度器不在默认启动集里（要先配好 notify 凭据）。这里显式回显它的状态——
+    # 否则「服务都起了」是错觉：定时邮件不会发出，而用户只能看到
+    # 「邮件突然没了、只剩实时盯盘」这种查不出原因的症状。
+    if "scheduler" not in names and not _is_running("scheduler"):
+        print()
+        print("⚠️  调度器（定时分析邮件推送）未启动。")
+        print("   它不随 start-all 自动拉起。需要定时邮件请执行：")
+        print("   python deploy/ctl.py start-all --with-scheduler")
 
 
 def cmd_stop_all() -> None:

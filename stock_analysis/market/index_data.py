@@ -46,6 +46,33 @@ def fetch_index_kline(symbol: str = "sh000001", days: int = 160) -> Optional[pd.
         return None
 
 
+def regime_for_market(
+    market: str, index_symbol: str = "sh000001"
+) -> tuple[Optional[float], float]:
+    """按市场取「市场状态分 / 环境系数」；**非 A 股一律返回中性**。
+
+    为什么需要它：``index_symbol`` 默认是上证指数，只对 A 股有意义。原实现无论
+    CN/HK/US 都拿它取状态并传给引擎，于是港股/美股的评分与仓位被一个与自身
+    无关的指数牵着走；而且看板「列表扫描」已经按市场中性化、「单票详情」没有 ——
+    同一只票在两处得到不同结论。这里把规则收敛成一处。
+
+    Returns:
+        ``(regime_score, market_factor)``。中性为 ``(None, 1.0)`` —— 传 ``None``
+        让 ``calc_stock_score`` 走它自己的中性 50 分，而不是伪造一个假分数。
+    """
+    if str(market or "CN").upper() != "CN":
+        return None, 1.0
+    try:
+        ctx = fetch_market_context(str(index_symbol or "sh000001"))
+        regime = (ctx or {}).get("regime")
+    except Exception as e:  # noqa: BLE001
+        log.warning("市场状态获取失败，按中性处理: %s", e)
+        return None, 1.0
+    if regime is None:
+        return None, 1.0
+    return regime.score, regime.factor
+
+
 def fetch_market_context(symbol: str = "sh000001", days: int = 160) -> dict:
     """拉取指数并返回市场状态上下文（regime + risk + breadth=中性）。
 

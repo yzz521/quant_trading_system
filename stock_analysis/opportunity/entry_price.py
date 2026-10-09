@@ -11,7 +11,32 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from .risk_reward import MIN_RISK_PCT
 from .support_resistance import SupportResistance, detect_support_resistance
+
+#: 入场带相对「标准入场价」的半宽上限（±3%）。
+#:
+#: 为什么必须有上限：原实现取 ``low = min(ideal, standard)``、``high = aggressive``，
+#: 而 ``ideal`` 可以落到 120 日最低点、``aggressive`` 可以落到 120 日最高点 ——
+#: 于是「入场区间」实测中位宽 **18.6%**、p90 **72.8%**、最大 **160.5%**。
+#: 那不是一个限价买入区间，而是一整段价格走势。
+#:
+#: 后果（40 只 A 股实测）：
+#:   * **57.5%** 的计划出现 ``entry_low < stop_loss`` —— 字面意思是「可以在止损位下方买入」
+#:   * **45.0%** 的计划出现 ``entry_high > target_1`` —— 「可以买在目标价上方」
+#: 过深的下沿要么永远不成交（说明趋势没回来），要么成交是因为趋势已破（那就不该买）；
+#: 过高的上沿已经不是限价单而是市价单。
+MAX_ENTRY_HALF_WIDTH = 0.03
+
+#: 半宽下限（±0.5%）。避免区间退化成一条线（``low == high`` 会被判为不可交易）。
+MIN_ENTRY_HALF_WIDTH = 0.005
+
+#: 激进入场相对现价的最大溢价（2%）。
+#:
+#: ``aggressive`` 原可落到 120 日前高（实测某票现价 31.3、上沿 41.49，+32%）。
+#: 「突破前高追入」是**条件单**，不是今天能挂的限价买单价，不该撑开入场区间。
+#: 超出部分降级为 ``evidence["breakout_hint"]`` 保留提示。
+MAX_ENTRY_ABOVE = 0.02
 
 
 @dataclass
@@ -91,7 +116,11 @@ def calc_entry_zone(
         bases.append((ma60, "MA60"))
     if boll_mid and boll_mid < cur:
         bases.append((boll_mid, "BOLL中轨"))
-    if prev_low:
+    # ⚠️ ``prev_low`` 必须同样过滤 ``< cur``：它是「近 120 日最低价（不含今日）」，
+    # 当今日向下破位时它可以**高于现价**。原实现漏了这一步，于是「标准入场价」
+    # 会跑到现价上方（实测 2/40：华工科技现价 86.99、标准入场 90.23），
+    # 连带把止损、目标、赔率全部算在了一个买不到的价格上。
+    if prev_low and prev_low < cur:
         bases.append((prev_low, "近期低点"))
     if sr and isinstance(sr.evidence, dict):
         fib = sr.evidence.get("fibonacci") or {}
@@ -137,13 +166,33 @@ def calc_entry_zone(
     if aggressive < cur * 0.99:
         aggressive = cur * 1.002
         aggr_src = "贴现价0.2%"
+    # 上沿不得离现价过远：结构位（前高/布林下轨）属于「突破条件单」，
+    # 不是今天能挂的限价买单价 —— 只作提示保留，不撑开入场区间。
+    if aggressive > cur * (1 + MAX_ENTRY_ABOVE):
+        evidence["breakout_hint"] = {"price": round(aggressive, 2), "source": aggr_src}
+        aggressive = cur * (1 + MAX_ENTRY_ABOVE)
+        aggr_src = f"限价上沿(现价+{MAX_ENTRY_ABOVE * 100:.0f}%)"
     evidence["aggressive"] = {"price": round(aggressive, 2), "source": aggr_src}
 
-    # 入场区间
-    low = min(ideal, standard)
-    high = aggressive
-    if high <= low:
-        high = low * 1.02
+    # ---------- 入场区间 ----------
+    # 以「标准入场价」为中心的限价带。
+    #
+    # 为什么锚在 standard 而不是 min(ideal, standard)：standard 正是下游用来算
+    # 止损与目标价的那个价（见 opportunity_engine），区间把它含在内才谈得上自洽；
+    # ideal（更深一档回调）只作「深回调提示」，不再撑开下沿。
+    half = min(max(aggressive - standard, 0.0), MAX_ENTRY_HALF_WIDTH * standard)
+    half = max(half, MIN_ENTRY_HALF_WIDTH * standard)
+    low = standard - half
+    high = standard + half
+    evidence["zone"] = {
+        "anchor": "标准入场价",
+        "half_width_pct": round(half / standard * 100, 2),
+    }
+    if ideal < low:
+        evidence["deep_pullback_hint"] = {
+            "price": round(ideal, 2),
+            "source": evidence["ideal"]["source"],
+        }
     evidence["low"] = round(low, 2)
     evidence["high"] = round(high, 2)
 
@@ -155,3 +204,50 @@ def calc_entry_zone(
         high=round(high, 2),
         evidence=evidence,
     )
+
+
+def reconcile_entry_zone(
+    low: Optional[float],
+    high: Optional[float],
+    *,
+    stop_loss: Optional[float],
+    target_1: Optional[float],
+    min_risk_pct: float = MIN_RISK_PCT,
+) -> tuple[Optional[float], Optional[float], bool, str]:
+    """把入场区间夹到与止损/目标几何自洽的范围内。
+
+    规则：
+      * 下沿必须高于止损 —— 否则计划在教用户「在止损位下方买入」
+      * 上沿必须低于目标 —— 否则计划在教用户「买在目标价上方」
+      * 夹逼后 ``low >= high`` → 区间为空 → 计划不可交易
+
+    Args:
+        low/high: ``calc_entry_zone`` 输出的区间。
+        stop_loss/target_1: 同一计划的止损与一档目标。
+        min_risk_pct: 夹逼时留出的缓冲（与 ``risk_reward.MIN_RISK_PCT`` 同源）。
+
+    Returns:
+        ``(low, high, ok, note)``。``ok=False`` 时原样返回入参，由调用方作废该计划。
+    """
+    if low is None or high is None:
+        return low, high, True, ""
+    if not stop_loss or not target_1:
+        return low, high, True, ""
+    if stop_loss >= target_1:
+        return low, high, False, (
+            f"止损 {stop_loss} 不低于目标 {target_1}，计划无效"
+        )
+    new_low = max(low, stop_loss * (1 + min_risk_pct))
+    new_high = min(high, target_1 * (1 - min_risk_pct))
+    if new_low >= new_high:
+        return low, high, False, (
+            f"入场区间 {low}~{high} 与止损 {stop_loss}/目标 {target_1} 无法自洽"
+            f"（止损到目标之间没有可下单的空间）"
+        )
+    note = ""
+    if new_low > low or new_high < high:
+        note = (
+            f"入场区间已按止损/目标夹逼：{low}~{high} → "
+            f"{round(new_low, 2)}~{round(new_high, 2)}"
+        )
+    return round(new_low, 2), round(new_high, 2), True, note

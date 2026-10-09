@@ -24,12 +24,18 @@ import streamlit as st
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.disclaimer import render_disclaimer
 from quant_trading_system.dashboard.paths import holdings_config, notify_config
+from quant_trading_system.dashboard.realtime_status import render_badge
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header
-from quant_trading_system.stock_analysis.data_fetcher import detect_market, fetch_name
+from quant_trading_system.stock_analysis.data_fetcher import (
+    detect_market,
+    fetch_live_prices,
+    fetch_name,
+)
 from quant_trading_system.stock_analysis.holdings import Holdings
 from quant_trading_system.stock_analysis.holdings_action import analyze_holding_actions
 from quant_trading_system.stock_analysis.holdings_quant import (
     analyze_holdings_quant,
+    apply_live_prices,
     cached_items,
     save_market_cache,
     session_date,
@@ -40,6 +46,8 @@ from quant_trading_system.stock_analysis.trade_monitor import TradeMonitor
 apply_theme()
 require_login()
 page_header("持仓指挥台", "资金约束 · 本地账本 · 卖出区间与动作建议", "Holdings")
+# 快轨状态条：一眼看出实时盯盘在不在跑（详情在「配置 → 实时盯盘」）
+render_badge()
 
 MARKETS = ["CN", "US", "HK"]
 
@@ -58,6 +66,14 @@ def _label(p: dict) -> str:
 
 def _pfmt(v) -> str:
     return f"{v:.4f}" if isinstance(v, (int, float)) else "-"
+
+
+def _pct(v, digits: int = 1) -> str:
+    """比例（0~1）→ 百分数字符串；None/非数返回「—」。"""
+    try:
+        return f"{float(v) * 100:.{digits}f}%"
+    except (TypeError, ValueError):
+        return "—"
 
 
 # --------------------------------------------------------------------------- #
@@ -159,8 +175,11 @@ with tab_overview:
             with st.spinner("正在分析持仓（K线 + 技术面 + 信息面）..."):
                 try:
                     rows_q = positions
+                    live = {}
                     try:
                         rows_q, _ = _holder.compute_pnl()
+                        live = {str(r.get("code")): r.get("current_price")
+                                for r in rows_q if r.get("current_price")}
                     except Exception:  # noqa: BLE001
                         pass
                     zones = {}
@@ -170,7 +189,9 @@ with tab_overview:
                                 zones[str(a["code"])] = a
                     except Exception:  # noqa: BLE001
                         zones = {}
-                    items = analyze_holdings_quant(rows_q, fetch_news=True, zones=zones)
+                    # 把上面刚取到的同一份实时价传进去 → 与「我的持仓」表完全同价
+                    items = analyze_holdings_quant(rows_q, fetch_news=True, zones=zones,
+                                                   prices=live or None)
                     st.session_state["holdings_quant"] = items
                     by_m: dict[str, list] = {}
                     for a in items:
@@ -181,6 +202,17 @@ with tab_overview:
                     st.error(str(e))
         items = st.session_state.get("holdings_quant")
         if items:
+            # 缓存是当天早些时候落盘的，直接展示会出现「持仓表一个价、持仓量化另一个价」。
+            # 用同一份实时快照刷新现价与盈亏%（技术位不动），保证同屏同价。
+            with st.spinner("同步实时价 ..."):
+                try:
+                    apply_live_prices(items, fetch_live_prices([a.get("code") for a in items]))
+                except Exception as e:  # noqa: BLE001
+                    st.caption(f"实时价同步失败（{e}），现价可能为上次分析时点")
+            stamp = next((a.get("as_of") for a in items if a.get("as_of")), "")
+            if stamp:
+                st.caption(f"现价与「持仓总览」同源；技术面（止损/入场区）基于 {stamp} 的 K 线，"
+                           "盘中未收盘会随后续刷新变化。")
             qrows = []
             for a in items:
                 qrows.append({
@@ -195,6 +227,101 @@ with tab_overview:
                     "说明": a.get("note") or a.get("error") or "",
                 })
             st.dataframe(pd.DataFrame(qrows), use_container_width=True, hide_index=True)
+
+    # ---- 组合级风控：集中度 / 行业暴露 / VaR / 回撤熔断 ----
+    if positions:
+        st.markdown("---")
+        st.subheader("🛡 组合风控")
+        st.caption("单票仓位只回答「这一笔买多少」，这里回答「合起来的风险有多大」："
+                   "行业是否过度集中、持仓是否同涨同跌、极端日可能亏多少、回撤时该不该继续开新仓。")
+        try:
+            from quant_trading_system.stock_analysis.holdings_quant import portfolio_risk_block
+            from quant_trading_system.stock_analysis.portfolio_risk import (
+                equity_values,
+                load_equity_history,
+                record_equity,
+            )
+
+            rows_r = positions
+            try:
+                rows_r, _ = _holder.compute_pnl()
+            except Exception:  # noqa: BLE001
+                pass
+            snap_r = _holder.capital_snapshot() or {}
+            total_equity = snap_r.get("total_capital")
+            if total_equity:
+                mv = sum(float(h.get("current_price") or h.get("cost_price") or 0)
+                         * float(h.get("quantity") or 0) for h in rows_r)
+                net_worth = mv + float(snap_r.get("available_cash") or 0)
+                record_equity(net_worth if net_worth > 0 else float(total_equity))
+            curve = equity_values(load_equity_history()) or None
+            sector_map = {}
+            try:
+                from quant_trading_system.stock_analysis.sector import get_stock_sectors
+                sector_map = get_stock_sectors()
+            except Exception:  # noqa: BLE001
+                sector_map = {}
+            # 历史日收益面板：相关性/协方差/参数法 VaR 全靠它。不传的话
+            # 「平均两两相关」「单日 VaR」在生产里永远是「—」。
+            returns = None
+            try:
+                from quant_trading_system.stock_analysis.returns_panel import (
+                    returns_for_holdings,
+                    returns_or_none,
+                )
+                # 不能用 `returns_for_holdings(...) or None`：DataFrame 布尔值有歧义
+                returns = returns_or_none(returns_for_holdings(rows_r))
+            except Exception as e:  # noqa: BLE001
+                returns = None
+                st.caption(f"（历史收益面板不可用，相关性与 VaR 暂缺：{e}）")
+            block = portfolio_risk_block(rows_r, total_equity=total_equity,
+                                        sector_map=sector_map, equity_curve=curve,
+                                        returns=returns)
+            if not block:
+                st.caption("暂无足够数据计算组合风控（需要持仓数量与现价）。")
+            else:
+                rep = block.get("report") or {}
+                conc, corr = rep.get("concentration") or {}, rep.get("correlation") or {}
+                var, dd = rep.get("var") or {}, rep.get("drawdown") or {}
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("有效持仓数", conc.get("effective_n") or "—",
+                          help="1/HHI，越小说明越集中")
+                c2.metric("单票最大", _pct(conc.get("top1")))
+                c3.metric("前三大合计", _pct(conc.get("top3")))
+                c4.metric("平均两两相关", "—" if corr.get("avg_corr") is None
+                          else f"{corr['avg_corr']:.2f}")
+                c5.metric("单日 VaR(95%)", _pct(var.get("var"), 2),
+                          help="参数法：正态假设下 95% 置信的单日最大亏损（占总资产）")
+                if dd.get("current_drawdown") is not None:
+                    st.caption(f"净值回撤：当前 {_pct(dd.get('current_drawdown'))}"
+                               f"（历史最大 {_pct(dd.get('max_drawdown'))}）"
+                               f" → 新开仓建议仓位系数 {_pct(block.get('brake'), 0)}")
+                elif not block.get("equity_armed", True):
+                    st.caption("净值回撤：暂无可用净值曲线，回撤熔断未启用。")
+                # 熔断按交易日累积净值，前 N 天依据必然偏薄 —— 明说，
+                # 否则「没触发」与「还没能力判断」在看板上长得一模一样。
+                if not block.get("equity_armed", True) and block.get("equity_n", 0) > 0:
+                    st.info(
+                        f"ℹ️ 净值曲线仅 {block.get('equity_n')} 个交易日"
+                        f"（可靠判断需 ≥{block.get('equity_required')}）→ "
+                        f"回撤熔断**仍按现有曲线生效**，但判断依据偏薄。"
+                        f"曲线每个交易日自动累积（`results/equity_history.json`），"
+                        f"满 {block.get('equity_required')} 个交易日后才足够可靠。"
+                    )
+                ind = rep.get("by_industry") or []
+                if ind:
+                    st.dataframe(pd.DataFrame(ind).rename(columns={
+                        "industry": "行业", "weight": "权重", "n": "只数",
+                        "over_limit": "超限"}),
+                        use_container_width=True, hide_index=True)
+                if block.get("breaches"):
+                    st.error("；".join(block["breaches"]))
+                if block.get("actions"):
+                    st.info("调整建议：\n" + "\n".join(f"- {a}" for a in block["actions"]))
+                with st.expander("查看完整组合风控明细"):
+                    st.code(block.get("summary", ""), language=None)
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"组合风控不可用：{e}")
 
 # =========================== 粘贴成交 =========================== #
 with tab_paste:

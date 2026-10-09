@@ -6,7 +6,7 @@
   * market_risk: 市场风险（波动率、回撤、量能异常）
   * index_data: 指数行情获取（上证/沪深300 等，失败降级中性）
 """
-from .index_data import fetch_index_kline, fetch_market_context
+from .index_data import fetch_index_kline, fetch_market_context, regime_for_market
 from .market_breadth import MarketBreadth, calc_market_breadth
 from .market_regime import REGIME_FACTOR, MarketRegime, MarketRegimeState, detect_market_regime
 from .market_risk import MarketRisk, calc_market_risk
@@ -22,4 +22,5 @@ __all__ = [
     "calc_market_risk",
     "fetch_index_kline",
     "fetch_market_context",
+    "regime_for_market",
 ]

@@ -1,11 +1,11 @@
 """Information-layer classification (offline). Network fetch is fail-open."""
 from __future__ import annotations
 
-from quant_trading_system.stock_analysis.news import classify_title, rate_headlines
-from quant_trading_system.stock_analysis.scoring.stock_score import calc_stock_score
-from quant_trading_system.stock_analysis.indicators import add_all_indicators
 import numpy as np
 import pandas as pd
+from quant_trading_system.stock_analysis.indicators import add_all_indicators
+from quant_trading_system.stock_analysis.news import classify_title, rate_headlines
+from quant_trading_system.stock_analysis.scoring.stock_score import calc_stock_score
 
 
 def test_classify_risk_wins_over_catalyst():

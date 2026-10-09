@@ -71,9 +71,13 @@ def calc_position_size(
     cap_amount = account_equity * max_position_pct
     cap_shares = int(np.floor(cap_amount / entry_price / lot_size)) * lot_size
 
-    suggested = min(max_shares, cap_shares) if (max_shares and cap_shares) else max(max_shares, cap_shares)
-    suggested = max(suggested, 0)
-    capped = bool(cap_shares < max_shares) and cap_shares > 0
+    # 两个约束都是**上限**，所以答案是取更严的那个。
+    # 原实现写的是 `min(a, b) if (a and b) else max(a, b)`：任一为 0 时反而取 max，
+    # 于是「风险预算连一手都买不起（max_shares=0）」会变成「买满单票上限」，
+    # 「一手就超过单票上限（cap_shares=0）」会变成「按风险预算满买」——
+    # 两个方向都与风控意图完全相反。
+    suggested = max(0, min(max_shares, cap_shares))
+    capped = bool(cap_shares < max_shares)
 
     position_amount = round(suggested * entry_price, 2)
     position_percent = round(position_amount / account_equity * 100, 2) if account_equity else 0.0

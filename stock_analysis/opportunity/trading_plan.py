@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .entry_price import EntryPrice
     from .exit_price import ExitPrice
+    from .quality_gate import QualityGateResult
     from .risk_reward import RiskReward
 
 
@@ -117,21 +118,49 @@ def build_trading_plan(
     risks: Optional[list[str]] = None,
     invalidate_condition: str = "",
     holding_period: str = "5~20 个交易日",
+    gate: Optional["QualityGateResult"] = None,
+    price_as_of: str = "",
+    bar_as_of: str = "",
+    fundamental_as_of: str = "",
+    data_coverage: Optional[float] = None,
+    geometry_ok: bool = True,
+    geometry_note: str = "",
 ) -> TradingPlan:
     """由各引擎输出组装 TradingPlan 并自动判定决策状态。
 
     决策规则（优先级从高到低）：
-      1. RR < 1.5              → AVOID
-      2. 现价 ≤ 入场区间上沿   → BUY_NOW
-      3. 现价 ≤ 理想入场*1.15  → BUY_ON_PULLBACK（接近区间）
-      4. 否则                  → WATCH
+      1. 几何不自洽（``geometry_ok=False``） → AVOID
+      2. RR < 1.5              → AVOID
+      3. 现价 ≤ 入场区间上沿   → BUY_NOW
+      4. 现价 ≤ 理想入场*1.15  → BUY_ON_PULLBACK（接近区间）
+      5. 否则                  → WATCH
+
+    **几何自洽性（2026-10 新增）**：入场区间与止损/目标矛盾的计划直接作废 ——
+    例如区间下沿低于止损（「在止损位下方买入」）或上沿高于目标（「买在目标价上方」）。
+    这类计划即使分数与赔率都好看，也是字面意义上无法执行的。
+
+    **质量闸门（2026-09 新增）**：传入 ``gate`` 后，买入状态还要过质量关：
+
+      * ``gate.tier == REJECT`` → 直接 AVOID（重大风险 / 亏损股 / 估值离谱 / 流动性不足）
+      * ``gate.tier == WATCH``  → 买入状态降级为 WATCH（分数不够 / 数据不全 / RR 偏低）
+      * ``gate.tier == BUY``    → 保持原决策
+
+    降级而不是直接丢弃，是为了让用户看到「它本来会被推荐，但没通过哪一条」——
+    不通过原因写入 ``meta["quality_gate"]``，看板与 AI 解读直接展示。
     """
     decision = DecisionState.WATCH
     low = entry.low if entry else None
     high = entry.high if entry else None
     ideal = entry.ideal if entry else None
+    risks = list(risks or [])
 
-    if rr.ratio_1 is not None and rr.ratio_1 < 1.5:
+    if not geometry_ok:
+        decision = DecisionState.AVOID
+        if geometry_note:
+            line = f"计划几何不自洽：{geometry_note}"
+            if line not in risks:
+                risks.append(line)
+    elif rr.ratio_1 is not None and rr.ratio_1 < 1.5:
         decision = DecisionState.AVOID
     elif low is not None and high is not None:
         if current_price <= high:
@@ -140,6 +169,38 @@ def build_trading_plan(
             decision = DecisionState.BUY_ON_PULLBACK
         else:
             decision = DecisionState.WATCH
+
+    # ---- 质量闸门：买入状态必须过质量关 ----
+    gate_downgrade = ""
+    if gate is not None and not gate.passed:
+        if gate.tier == "REJECT":
+            if decision != DecisionState.AVOID:
+                gate_downgrade = f"{decision.value} → AVOID（质量闸门硬否决）"
+            decision = DecisionState.AVOID
+        elif decision in (DecisionState.BUY_NOW, DecisionState.BUY_ON_PULLBACK):
+            gate_downgrade = f"{decision.value} → WATCH（质量闸门未通过）"
+            decision = DecisionState.WATCH
+
+    meta: dict = {
+        "stop_source": exit_.stop_source if exit_ else "",
+        "grade": rr.grade if rr else "",
+    }
+    if gate is not None:
+        meta["quality_gate"] = gate.to_dict()
+        if gate_downgrade:
+            meta["gate_downgrade"] = gate_downgrade
+    if data_coverage is not None:
+        meta["data_coverage"] = round(float(data_coverage), 3)
+    if price_as_of:
+        meta["price_as_of"] = price_as_of
+    if bar_as_of:
+        meta["bar_as_of"] = bar_as_of
+    if fundamental_as_of:
+        meta["fundamental_as_of"] = fundamental_as_of
+    if geometry_note:
+        meta["geometry_note"] = geometry_note
+    if not geometry_ok:
+        meta["geometry_ok"] = False
 
     return TradingPlan(
         code=code,
@@ -161,10 +222,7 @@ def build_trading_plan(
         holding_period=holding_period,
         confidence=confidence,
         reasons=reasons or [],
-        risks=risks or [],
+        risks=risks,
         invalidate_condition=invalidate_condition,
-        meta={
-            "stop_source": exit_.stop_source if exit_ else "",
-            "grade": rr.grade if rr else "",
-        },
+        meta=meta,
     )

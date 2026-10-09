@@ -172,8 +172,9 @@ def build_market_message(
     holding_quant: Optional[list] = None,
     holding_actions: Optional[list] = None,
     trading_plans: Optional[list] = None,
+    portfolio_risk: Optional[dict] = None,
 ) -> tuple[str, str, str]:
-    """构建每日决策邮件（持仓 / 资金 / 持仓量化 / 今日机会 / 卖出加仓参考）。"""
+    """构建每日决策邮件（持仓 / 资金 / 组合风控 / 持仓量化 / 今日机会 / 卖出加仓参考）。"""
     now = time.strftime("%Y-%m-%d %H:%M")
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
     title = f"GP助手 · {mname} {now}"
@@ -221,6 +222,14 @@ def build_market_message(
             f"满仓时「可买」常为空属正常。</p>",
         ))
 
+    # --- portfolio risk (集中度 / 行业暴露 / 相关性 / VaR / 回撤熔断) ---
+    if portfolio_risk:
+        from .holdings_quant import risk_block_to_html, risk_block_to_text
+
+        text_parts.append(risk_block_to_text(portfolio_risk))
+        text_parts.append("")
+        html_parts.append(_html_section("🛡 组合风控", risk_block_to_html(portfolio_risk)))
+
     # --- holdings quant (once per session day; already-held interpretation) ---
     if holding_quant:
         from .holdings_quant import quant_to_html, quant_to_text
@@ -252,6 +261,13 @@ def build_market_message(
         text_parts.append(actions_to_text(holding_actions))
         text_parts.append("")
         html_parts.append(_html_section("🎯 持仓卖出/加仓参考", actions_to_html(holding_actions)))
+
+    # --- 合规：纯文本正文也必须带免责声明（HTML 页脚已有一份） ---
+    from .ai.guard import DISCLAIMER
+
+    if DISCLAIMER not in "\n".join(text_parts):
+        text_parts.append("")
+        text_parts.append(DISCLAIMER)
 
     text_body = "\n".join(text_parts)
     html_body = _html_wrap(title, mname, html_parts)

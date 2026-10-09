@@ -17,6 +17,7 @@ st.set_page_config(
 
 from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.disclaimer import render_disclaimer
+from quant_trading_system.dashboard.realtime_status import render_badge
 from quant_trading_system.dashboard.ui_theme import apply_theme
 from quant_trading_system.utils.app_meta import APP_VERSION
 
@@ -33,6 +34,9 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+# 快轨状态条：首页就能看出实时盯盘在不在跑（详情在「配置 → 实时盯盘」）
+render_badge()
 
 c1, c2, c3 = st.columns(3)
 with c1:

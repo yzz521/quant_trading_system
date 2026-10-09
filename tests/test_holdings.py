@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from quant_trading_system.stock_analysis.holdings import Holdings
 
 

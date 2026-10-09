@@ -13,6 +13,7 @@ Network notes
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -217,12 +218,35 @@ def _batches(items: list, size: int):
         yield items[i:i + size]
 
 
-def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
-    """新浪全市场快照（一次调用）→ 标准化 code/name/close/pct_chg/volume/amount。
+def fetch_spot_snapshot(min_amount: Optional[float] = None) -> Optional[pd.DataFrame]:
+    """A股全市场快照 → 标准化 code/name/close/pct_chg/volume/amount(+市值/PE/换手/PB)。
 
-    东财批量快照在当前网络下不可用，新浪源稳定。用于漏斗 L1 硬过滤。
-    同时透出 L2 需要的市值/PE/换手率字段（腾讯行情失败时做 L2 回退）。
+    源顺序：**东财 push2（首选）→ 新浪 akshare（旧源，回退）**。
+
+    ⚠️ 2026-09-16：新浪 ``vip.stock.finance.sina.com.cn/quotes_service/...``
+    对该网络直接返回「拒绝访问」HTML（加 UA/Referer 无效），
+    ``ak.stock_zh_a_spot()`` 因此全线 JSONDecodeError（港股 ``stock_hk_spot()``
+    同因失效），看板「今日推荐」与顶部市场宽度一起空掉。故改为东财优先。
+
+    Args:
+        min_amount: 只用于**初筛**（按成交额降序取前若干页，约 8 次请求）。
+            传 None 表示要全市场（市场宽度用，约 60 次请求，带进程内缓存）。
+
+    用途：漏斗 L1 硬过滤 + 顶部市场宽度。
     """
+    if min_amount:
+        df = fetch_spot_candidates_em(EM_FS_CN, min_amount=min_amount)
+        if df is not None and not df.empty:
+            return df
+    else:
+        df = fetch_spot_snapshot_em(EM_FS_CN)
+        if df is not None and not df.empty:
+            return df
+    return _fetch_spot_snapshot_sina()
+
+
+def _fetch_spot_snapshot_sina() -> Optional[pd.DataFrame]:
+    """旧源（新浪，经 akshare）——东财不可用时回退，行为与改动前一致。"""
     try:
         _clear_proxy()
         import akshare as ak
@@ -250,6 +274,205 @@ def fetch_spot_snapshot() -> Optional[pd.DataFrame]:
         return df[[c for c in keep if c in df.columns]]
     except Exception as e:  # noqa: BLE001
         log.warning("新浪全市场快照获取失败: %s", e)
+        return None
+
+
+# ---- 东财 push2 全市场快照（纯 urllib，线程安全） -------------------------- #
+# 东财列表接口单页硬上限 100 条 → 全市场约 60 页。
+# ⚠️ 东财对单 IP 的短时请求量敏感：实测一次性打 60+ 请求（甚至连打三轮）后，
+#    `push2.eastmoney.com` 会对本机 IP 直接拒连（curl http=000，而腾讯行情
+#    同刻 200），且数分钟内不恢复；`push2delay.eastmoney.com` 仍然可用。
+#    因此这里做了三件事：
+#      1. 主域名失败自动切备用域名（`_EM_HOSTS`）；
+#      2. 需要全市场时加**进程内 TTL 缓存**（同一轮 10 分钟只打一次）；
+#      3. 初筛只按成交额降序取前几页（`fetch_spot_candidates_em`），
+#         把 60 次请求降到 8 次以内。
+# 用 fid=f12（代码）排序拉全量而不是 fid=f3（涨跌幅）：盘中排序持续变化，
+# 翻页期间按涨跌幅排序会漏票/重复。
+_EM_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+_EM_CLIST_PATH = "/api/qt/clist/get"
+_EM_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+_EM_FIELDS = "f12,f14,f2,f3,f5,f6,f8,f9,f20,f21,f23"
+# 沪主板+科创(m:1+t:2/m:1+t:23)、深主板+创业(m:0+t:6/m:0+t:80)、北交所(m:0+t:81+s:2048)
+EM_FS_CN = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
+EM_FS_HK = "m:116"
+_EM_PAGE_SIZE = 100        # 东财单页硬上限（pz 传更大也只返回 100）
+_EM_MAX_PAGES = 90         # 全量页数上限
+_EM_CAND_PAGES = 8         # 初筛页数（成交额降序，800 只，覆盖任何 top_n 需求）
+_EM_WORKERS = 4
+_EM_TTL_SEC = 600.0        # 全市场快照进程内缓存（与看板 st.cache_data 同一量级）
+# (fs, sort) → (时间戳, 行)
+_EM_SPOT_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
+_EM_COLMAP = {
+    "f12": "code", "f14": "name", "f2": "close", "f3": "pct_chg",
+    "f5": "volume", "f6": "amount", "f8": "turnover", "f9": "pe",
+    "f20": "total_cap", "f21": "float_cap", "f23": "pb",
+}
+
+
+def _em_clist_page(pn: int, fs: str, sort: str = "f12", host: Optional[str] = None,
+                   attempts: int = 2) -> tuple[list[dict], int]:
+    """东财 push2 列表单页 → (diff 行, total)。失败抛异常（由调用方决定降级）。"""
+    import json
+    import time
+    import urllib.request
+
+    host = host or _EM_HOSTS[0]
+    url = (f"https://{host}{_EM_CLIST_PATH}?pn={pn}&pz={_EM_PAGE_SIZE}&po=1&np=1"
+           f"&fltt=2&invt=2&fid={sort}&fs={fs}&fields={_EM_FIELDS}")
+    last: Optional[Exception] = None
+    for i in range(max(1, attempts)):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": _EM_UA})
+            _clear_proxy()
+            raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+            data = (json.loads(raw) or {}).get("data") or {}
+            return list(data.get("diff") or []), int(data.get("total") or 0)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i + 1 < attempts:
+                time.sleep(0.4 * (i + 1))
+    raise last if last else RuntimeError("东财快照未知错误")
+
+
+def _em_get_page(pn: int, fs: str, sort: str = "f12") -> tuple[list[dict], int]:
+    """按 `_EM_HOSTS` 顺序试各域名，全失败才抛异常。"""
+    last: Optional[Exception] = None
+    for host in _EM_HOSTS:
+        try:
+            return _em_clist_page(pn, fs, sort, host=host)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            log.debug("东财 %s 第 %d 页失败，尝试下一个域名: %s", host, pn, e)
+    raise last if last else RuntimeError("东财快照无可用域名")
+
+
+def _em_spot_rows(fs: str, *, sort: str = "f12", max_pages: Optional[int] = None,
+                  stop_below: Optional[float] = None,
+                  workers: int = _EM_WORKERS) -> list[dict]:
+    """拉列表行。
+
+    * ``max_pages=None``：全量（并发 + TTL 缓存），拿不到 ``total`` 的 60% 判整轮失败；
+    * ``max_pages=N``：顺序拉 N 页（可用于成交额降序早停），不缓存。
+    """
+    key = (fs, sort)
+    if max_pages is None:
+        hit = _EM_SPOT_CACHE.get(key)
+        if hit and time.time() - hit[0] < _EM_TTL_SEC:
+            return hit[1]
+
+    try:
+        first, total = _em_get_page(1, fs, sort)
+    except Exception as e:  # noqa: BLE001
+        log.warning("东财快照首页失败: %s", e)
+        return []
+    if not first:
+        return []
+    rows = list(first)
+
+    if max_pages is not None:
+        # 顺序翻页 + 早停：成交额降序时，某页最低成交额已低于阈值 → 后面只会更低
+        last_page = first
+        for pn in range(2, max_pages + 1):
+            if stop_below is not None:
+                lo = _em_page_min_amount(last_page)
+                if lo is not None and lo < stop_below:
+                    break
+            try:
+                part, _ = _em_get_page(pn, fs, sort)
+            except Exception as e:  # noqa: BLE001
+                log.debug("东财快照第 %d 页失败: %s", pn, e)
+                break
+            if not part:
+                break
+            rows.extend(part)
+            last_page = part
+        return rows
+
+    pages = min(_EM_MAX_PAGES, max(1, (total + _EM_PAGE_SIZE - 1) // _EM_PAGE_SIZE))
+    failed = 0
+    if pages > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(_em_get_page, pn, fs, sort): pn for pn in range(2, pages + 1)}
+            for f in as_completed(futs):
+                try:
+                    part, _ = f.result()
+                    rows.extend(part)
+                except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    log.debug("东财快照第 %s 页失败: %s", futs[f], e)
+    if failed:
+        log.warning("东财快照 %d/%d 页失败（已重试并切域名）", failed, pages)
+    if total and len(rows) < total * 0.6:
+        log.warning("东财快照仅取到 %d/%d 行，判定整轮失败", len(rows), total)
+        return []
+    _EM_SPOT_CACHE[key] = (time.time(), rows)
+    return rows
+
+
+def _em_page_min_amount(rows: list[dict]) -> Optional[float]:
+    vals = [pd.to_numeric(r.get("f6"), errors="coerce") for r in rows]
+    vals = [float(v) for v in vals if v is not None and v == v]
+    return min(vals) if vals else None
+
+
+def _em_spot_frame(rows: list[dict]) -> Optional[pd.DataFrame]:
+    """东财原始行 → 标准快照列（纯解析，不触网，可单测）。"""
+    if not rows:
+        return None
+    df = pd.DataFrame(rows).rename(columns=_EM_COLMAP)
+    if "code" not in df.columns or "amount" not in df.columns:
+        return None
+    for col in ("close", "pct_chg", "volume", "amount",
+                "turnover", "pe", "total_cap", "float_cap", "pb"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = float("nan")
+    # 停牌/退市行会出现 "-"，to_numeric 后为 NaN，保留（下游自行 dropna）
+    df["code"] = df["code"].astype(str).str.extract(r"(\d{5,6})")[0]
+    df = df.dropna(subset=["code"]).drop_duplicates(subset=["code"], keep="first")
+    if df.empty:
+        return None
+    df["total_cap_yi"] = df["total_cap"] / 1e8
+    df["float_cap_yi"] = df["float_cap"] / 1e8
+    keep = ["code", "name", "close", "pct_chg", "volume", "amount",
+            "total_cap_yi", "float_cap_yi", "pe", "turnover", "pb"]
+    return df[keep].reset_index(drop=True)
+
+
+def fetch_spot_snapshot_em(fs: str = EM_FS_CN) -> Optional[pd.DataFrame]:
+    """东财**全市场**快照（A股 ``EM_FS_CN`` / 港股 ``EM_FS_HK``）。失败返回 None。
+
+    约 60 次请求（A股 5900 只 / 每页 100），带 5 分钟进程内缓存 + 域名轮换，
+    供「需要全部标的」的场景（如市场宽度：涨跌家数）。只想选候选票请用
+    ``fetch_spot_candidates_em``（8 次请求）。
+    """
+    try:
+        return _em_spot_frame(_em_spot_rows(fs))
+    except Exception as e:  # noqa: BLE001
+        log.warning("东财全市场快照失败: %s", e)
+        return None
+
+
+def fetch_spot_candidates_em(fs: str = EM_FS_CN, *, min_amount: float = 5e7,
+                            max_pages: int = _EM_CAND_PAGES) -> Optional[pd.DataFrame]:
+    """东财**成交额降序前 N 页**快照 —— 供漏斗 L1 初筛（只关心成交额达标的候选）。
+
+    按成交额降序翻页，某页最低成交额已低于 ``min_amount`` 即停（默认最多 8 页 =
+    成交额最大的 800 只，足够覆盖 top_n ≤ 80 的任何需求）。相比全市场 60 次请求，
+    这里通常 1~8 次，避开东财的 IP 频控。
+    """
+    try:
+        rows = _em_spot_rows(fs, sort="f6", max_pages=max(1, max_pages),
+                             stop_below=min_amount)
+        return _em_spot_frame(rows)
+    except Exception as e:  # noqa: BLE001
+        log.warning("东财候选快照失败: %s", e)
         return None
 
 
@@ -303,6 +526,33 @@ def fetch_tencent_quotes(codes: list[str], batch: int = 50) -> Optional[pd.DataF
     if not rows:
         return None
     return pd.DataFrame(rows)
+
+
+def fetch_live_prices(codes: list[str]) -> dict[str, float]:
+    """批量实时价快照 → ``{标准化代码(大写): 现价}``；失败返回 ``{}``。
+
+    **全系统唯一的「现价」入口**。同一封邮件/同一屏页面里，持仓表的现价、
+    持仓量化的现价与盈亏% 必须来自同一份快照，否则同一只票会出现两个价格
+    （典型症状：持仓量化拿日 K 末根 = 昨收，而盈亏% 用的是当日价）。
+
+    调用方拿不到实时价时自行回退 K 线，不要在各自的分支里再写一遍取价逻辑。
+    """
+    out: dict[str, float] = {}
+    if not codes:
+        return out
+    try:
+        df = fetch_tencent_quotes(list(codes))
+    except Exception as e:  # noqa: BLE001
+        log.debug("实时价批量获取失败: %s", e)
+        return out
+    if df is None or df.empty:
+        return out
+    for _, r in df.iterrows():
+        p = _safe_float(r.get("close"))
+        code = str(r.get("code") or "").strip().upper()
+        if code and p is not None and p > 0:
+            out[code] = p
+    return out
 
 
 def _tencent_symbol(code: str) -> str:

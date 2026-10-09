@@ -24,13 +24,14 @@ from quant_trading_system.dashboard.auth import require_login
 from quant_trading_system.dashboard.capital import planned_capital, save_planned_capital
 from quant_trading_system.dashboard.disclaimer import render_disclaimer
 from quant_trading_system.dashboard.paths import notify_config
+from quant_trading_system.dashboard.realtime_status import render_badge
 from quant_trading_system.dashboard.ui_theme import apply_theme, page_header, scan_banner_html
 from quant_trading_system.stock_analysis import (
     add_all_indicators,
     detect_market,
     fetch_kline,
 )
-from quant_trading_system.stock_analysis.ai import explain_plan
+from quant_trading_system.stock_analysis.ai import explain_plan_with_review
 from quant_trading_system.stock_analysis.app_config import (
     MARKET_LABELS_UI,
     enabled_markets,
@@ -54,6 +55,8 @@ from quant_trading_system.utils import load_yaml
 apply_theme()
 require_login()
 page_header("今日机会", "每日投资决策 · V2", "Opportunity")
+# 快轨状态条：一眼看出实时盯盘在不在跑（详情在「配置 → 实时盯盘」）
+render_badge()
 
 # --------------------------------------------------------------------------- #
 # 顶部扫描状态条
@@ -85,6 +88,28 @@ def _cached_spot():
     """A股全市场快照（缓存 10 分钟，顶部市场状态与 CN 初筛共享）。"""
     from quant_trading_system.stock_analysis.data_fetcher import fetch_spot_snapshot
     return fetch_spot_snapshot()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _active_weights() -> tuple:
+    """当前生效的组合分权重（按因子验证结论自动降权，缓存 5 分钟）。
+
+    与批量扫描器共用同一套判定（``scoring.factor_weights``），保证**看板显示的
+    组合分与后台排序口径一致** —— 否则「按组合分降序」的表会出现分数不降序的怪象。
+    """
+    from quant_trading_system.stock_analysis.scoring.composite import COMPOSITE_WEIGHTS
+    from quant_trading_system.stock_analysis.scoring.factor_weights import active_weights
+
+    try:
+        w, meta = active_weights()
+        return dict(w), dict(meta)
+    except Exception as e:  # noqa: BLE001
+        return dict(COMPOSITE_WEIGHTS), {
+            "applied": False, "reason": f"读取因子验证报告失败：{e}", "notes": [],
+        }
+
+
+_W, _W_META = _active_weights()
 
 
 # --------------------------------------------------------------------------- #
@@ -161,15 +186,15 @@ top_n = st.number_input(
 @st.cache_data(ttl=600, show_spinner=False)
 def _scan_market(market: str, top_n: int, account_eq: float,
                  regime_score: float | None, market_factor: float, workers: int):
-    """单市场：全市场初筛 → 批量机会引擎（缓存 10 分钟）。返回 (cands, res)。"""
+    """单市场：全市场初筛 → 批量机会引擎（缓存 10 分钟）。返回 (cands, res)。
+
+    * 行业映射在初筛**之前**取：初筛要用它做行业分层取样，避免候选池被单一行业垄断。
+    * 市场状态只在 CN 生效；港股/美股用中性环境（此前统一套用上证状态，属口径错误）。
+    """
     from quant_trading_system.stock_analysis.screener import screen_candidates
     from quant_trading_system.stock_analysis.sector import fetch_sector_rank, get_stock_sectors
 
     try:
-        cands = screen_candidates(market, top_n=top_n)
-        if not cands:
-            return [], None
-        # Sector Rotation：CN 时构建板块强度+成分映射（失败自动中性 50）
         sector_rank, sector_map = [], {}
         if market == "CN":
             try:
@@ -177,10 +202,18 @@ def _scan_market(market: str, top_n: int, account_eq: float,
                 sector_map = get_stock_sectors()
             except Exception:  # noqa: BLE001
                 sector_rank, sector_map = [], {}
+        cn_regime = regime_score if market == "CN" else None
+        cn_factor = market_factor if market == "CN" else 1.0
+
+        cands = screen_candidates(
+            market, top_n=top_n, industry_map=sector_map or None
+        )
+        if not cands:
+            return [], None
         eng = OpportunityEngine(
             account_equity=account_eq,
-            regime_score=regime_score,
-            market_factor=market_factor,
+            regime_score=cn_regime,
+            market_factor=cn_factor,
             sector_map=sector_map,
             sector_rank=sector_rank,
             fetch_news=True,
@@ -233,14 +266,23 @@ except Exception as e:  # noqa: BLE001
 
 
 def _to_rows(plans: list) -> list:
+    from quant_trading_system.stock_analysis.scoring.composite import score_plan
+
     out = []
     for p in plans:
         meta = p.get("meta") or {}
+        gate = meta.get("quality_gate") or {}
+        cov = (gate.get("coverage") or {}).get("ratio")
         out.append({
             "代码·名称": f"{p.get('code')} {p.get('name')}",
             "板块": meta.get("sector") or "—",
+            "组合分": round(score_plan(p, _W), 1),
             "个股分": p.get("stock_score"),
             "机会分": p.get("opportunity_score"),
+            "质量闸门": {"BUY": "✅ 通过", "WATCH": "🟡 降级", "REJECT": "⛔ 否决"}.get(
+                str(gate.get("tier") or ""), "—"
+            ),
+            "数据完整度": f"{cov:.0%}" if isinstance(cov, (int, float)) else "—",
             "现价": p.get("current_price"),
             "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
             "止损": p.get("stop_loss"),
@@ -249,6 +291,13 @@ def _to_rows(plans: list) -> list:
             "仓位%": p.get("position_percent"),
         })
     return out
+
+
+def _render_gate_note(market: str) -> None:
+    """显示本轮闸门口径说明（例如未取到财务数据导致的放宽）。"""
+    _, res = scan_res.get(market, ([], None))
+    if res is not None and getattr(res, "gate_note", ""):
+        st.warning(res.gate_note)
 
 
 def _show_market_tab(market: str):
@@ -262,6 +311,7 @@ def _show_market_tab(market: str):
         return
     buy = [p for p in res.plans if p.get("decision") in ("BUY_NOW", "BUY_ON_PULLBACK")]
     watch = [p for p in res.plans if p.get("decision") == "WATCH"]
+    _render_gate_note(market)
     st.markdown("**🟢 买入列表**")
     if buy:
         st.dataframe(pd.DataFrame(_to_rows(buy)), use_container_width=True, hide_index=True)
@@ -270,6 +320,10 @@ def _show_market_tab(market: str):
     st.markdown("**🟡 关注列表**")
     if watch:
         st.dataframe(pd.DataFrame(_to_rows(watch)), use_container_width=True, hide_index=True)
+        st.caption(
+            "关注列表含**未通过质量闸门而被降级**的标的 —— 展开单只详情可看到具体"
+            "不通过原因（分数不足 / 数据缺失 / 风险偏高）。"
+        )
     else:
         st.info("当前无关注标的（WATCH）")
     if res.failed:
@@ -287,15 +341,22 @@ for m in MARKETS:
             if p.get("decision") in ("BUY_NOW", "BUY_ON_PULLBACK"):
                 all_buy.append({"market": m, **p})
 if all_buy:
+    from quant_trading_system.stock_analysis.scoring.composite import score_plan
+
     st.markdown("**📊 跨市场总览（买入候选）**")
     rows = []
-    for p in sorted(all_buy, key=lambda x: x.get("opportunity_score") or 0, reverse=True):
+    for p in sorted(all_buy, key=lambda x: score_plan(x, _W), reverse=True):
         meta = p.get("meta") or {}
+        gate = meta.get("quality_gate") or {}
+        cov = (gate.get("coverage") or {}).get("ratio")
         rows.append({
             "市场": MARKET_LABELS.get(p["market"], p["market"]),
             "代码·名称": f"{p.get('code')} {p.get('name')}",
             "板块": meta.get("sector") or "—",
+            "组合分": round(score_plan(p, _W), 1),
+            "个股分": p.get("stock_score"),
             "机会分": p.get("opportunity_score"),
+            "数据完整度": f"{cov:.0%}" if isinstance(cov, (int, float)) else "—",
             "现价": p.get("current_price"),
             "入场区间": f"{p.get('entry_low')}~{p.get('entry_high')}",
             "止损": p.get("stop_loss"),
@@ -303,6 +364,22 @@ if all_buy:
             "仓位%": p.get("position_percent"),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    _w_txt = " + ".join(
+        f"{ {'stock': '质量分', 'opportunity': '机会分', 'rr': '赔率'}.get(k, k) } {v:.0%}"
+        for k, v in _W.items()
+    )
+    if _W_META.get("applied"):
+        st.caption(
+            f"组合分 = {_w_txt}（赔率按 RR 映射，4R 封顶）。"
+            f"⚠️ 权重已**按因子验证结论自动降权**（非默认 45/35/20）："
+            f"{_W_META.get('reason')} 详见「因子验证」页。"
+        )
+    else:
+        st.caption(
+            f"组合分 = {_w_txt}（赔率按 RR 映射，4R 封顶）。"
+            f"{_W_META.get('reason') or ''}"
+            "排序已从「只按机会分」改为组合分，避免技术形态压过公司质量。"
+        )
 
 # 三市场明细 tabs
 mkt_tabs = st.tabs([f"{MARKET_LABELS[m]}" for m in MARKETS])
@@ -347,6 +424,11 @@ def _analyze_one(code: str, name: str, account_eq: float, regime_score: float | 
     )
 
     info = detect_market(code)
+    # 市场状态只对 A 股有意义：港股/美股强制中性。放在这里而不是调用方，
+    # 是为了保证「列表扫描」与「单票详情」不可能再出现两个口径 —— 原先列表
+    # 已中性化而详情仍用上证指数，同一只票两处结论不一致。
+    if info.market != "CN":
+        regime_score, market_factor = None, 1.0
     raw = fetch_kline(info, days=250)
     if raw is None or raw.empty:
         return None
@@ -448,6 +530,30 @@ if has_rec and sel_code:
         m3.metric("置信度", f"{p.confidence:.0%}")
         m4.metric("建议仓位", f"{p.position_percent:.1f}%" if p.position_percent is not None else "—")
 
+        # ---- 质量闸门与数据时点（决定「为什么不是买入」） ----
+        _meta = p.meta or {}
+        _gate = _meta.get("quality_gate") or {}
+        _cov = _gate.get("coverage") or {}
+        if _gate:
+            tier = str(_gate.get("tier") or "")
+            label = {"BUY": "✅ 通过", "WATCH": "🟡 降级为关注", "REJECT": "⛔ 硬否决"}.get(tier, tier)
+            st.markdown(f"**质量闸门：{label}**")
+            if _meta.get("gate_downgrade"):
+                st.caption(f"决策调整：{_meta['gate_downgrade']}")
+            if _gate.get("reasons"):
+                st.warning("未通过原因：\n" + "\n".join(f"- {r}" for r in _gate["reasons"]))
+            cov_ratio = _cov.get("ratio")
+            st.caption(
+                f"数据完整度 {cov_ratio:.0%}（{_cov.get('n_present', '—')}/{_cov.get('n_total', '—')} 字段）"
+                + (f"；缺失：{'、'.join(_cov.get('missing') or [])}" if _cov.get("missing") else "")
+            )
+        _as_of = " · ".join(
+            f"{k}={_meta[k]}" for k in ("price_as_of", "bar_as_of", "fundamental_as_of")
+            if _meta.get(k)
+        )
+        if _as_of:
+            st.caption(f"数据时点：{_as_of}")
+
         tech = (p.meta or {}).get("technical") or {}
         if tech.get("grade"):
             tags = " · ".join(tech.get("tags") or [])
@@ -501,8 +607,14 @@ if has_rec and sel_code:
         except Exception:  # noqa: BLE001
             cfg = None
         with st.spinner("AI 解读中..."):
-            ai_text = explain_plan(p, notify_cfg=cfg)
+            ai_text, ai_review = explain_plan_with_review(p, notify_cfg=cfg)
         st.markdown(ai_text)
+        if ai_review is not None and not ai_review.passed:
+            # 校验不通过时展示层必须说清楚：这段文案已被丢弃，看到的是规则化解读
+            st.warning("AI 文案未通过数值/决策一致性校验（"
+                       + ai_review.describe() + "），已自动回退为规则化解读。")
+        elif ai_review is not None and ai_review.notes:
+            st.caption("AI 解读校验提示：" + "；".join(ai_review.notes))
 
         st.markdown("#### 📊 历史规则回测")
         if bt_res.metrics and bt_res.metrics.sample_size > 0:
@@ -513,11 +625,24 @@ if has_rec and sel_code:
             r3.metric("止损触发率", f"{m.stop_loss_trigger_rate:.0%}")
             r4.metric("T1 命中率", f"{m.target_1_hit_rate:.0%}")
             r1, r2, r3, r4 = st.columns(4)
-            r1.metric("胜率", f"{m.win_rate:.0%}")
-            r2.metric("平均收益", f"{m.avg_return:.2f}%")
+            r1.metric("胜率", f"{m.win_rate:.0%}", help="只统计真正成交的交易，未成交不计入")
+            r2.metric("平均净收益", f"{m.avg_return:.2f}%",
+                      help=f"已扣除佣金/印花税/滑点；扣费前 {m.gross_avg_return:.2f}%")
             r3.metric("平均持有", f"{m.avg_holding_period:.1f} 日")
-            r4.metric("最大回撤", f"{m.max_drawdown:.2f}%")
-            st.caption("回测为历史规则有效性验证，不构成对未来表现的保证。")
+            r4.metric("最大回撤(逐笔)", f"{m.max_drawdown:.2f}%")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("组合总收益", f"{m.portfolio_total_return:.2f}%",
+                      help="按现金与持仓结算的可实现口径，消除重叠信号重复占用资金")
+            r2.metric("组合最大回撤", f"{m.portfolio_max_drawdown:.2f}%")
+            r3.metric("成本侵蚀/笔", f"{m.cost_drag:.2f}pp")
+            r4.metric("信号重叠率", f"{m.overlap_rate:.0%}")
+            st.caption(
+                f"成交口径：限价成交需真实触及委托价；已计佣金/印花税/滑点；"
+                f"止损按跳空价成交；一字涨跌停与停牌日不成交。"
+                f"未成交 {m.not_entered} 笔，容量受限 {m.capacity_limited_rate:.0%}，"
+                f"平均可成交比例 {m.avg_fill_ratio:.0%}。"
+                "回测为历史规则有效性验证，不构成对未来表现的保证。"
+            )
         else:
             st.info("样本不足，未生成回测。")
 else:
@@ -543,14 +668,19 @@ with st.expander("🛠 自定义扫描（手动输入任意代码）"):
             st.warning("请输入至少一个股票代码")
         else:
             with st.spinner(f"⏳ 正在批量分析 {len(codes)} 只，请稍候..."):
+                # 自定义扫描允许混市场：只有**全部为 A 股**时才套用上证市场状态，
+                # 否则中性 —— 上证指数只对 A 股有效，套到港股/美股会误导评分与仓位。
+                _all_cn = all(detect_market(c).market == "CN" for c in codes)
                 eng = OpportunityEngine(
                     account_equity=ACCOUNT,
-                    regime_score=regime.score if regime else None,
-                    market_factor=regime.factor if regime else 1.0,
+                    regime_score=(regime.score if regime else None) if _all_cn else None,
+                    market_factor=(regime.factor if regime else 1.0) if _all_cn else 1.0,
                     fetch_news=True,
                 )
                 scanner = OpportunityBatchScanner(engine=eng, workers=5)
                 custom_res = scanner.scan(codes)
+            if not _all_cn:
+                st.caption("候选含非 A 股标的：市场状态按中性处理（上证指数只对 A 股有效）。")
             if custom_res.plans:
                 st.success(f"✔ 扫描完成：{len(custom_res.plans)} 个有效计划（AVOID 已过滤，耗时 {custom_res.elapsed:.1f}s）")
                 rows = []
