@@ -3,7 +3,13 @@
 把个股的机会拆解为：支撑/阻力、入场区间、止损、目标价、风险收益比、
 仓位建议，最终由 TradingPlan 统一表达。
 """
-from .batch_scanner import BatchScanItem, BatchScanResult, OpportunityBatchScanner
+from .batch_scanner import (
+    MIN_KLINE_BARS,
+    BatchScanItem,
+    BatchScanResult,
+    OpportunityBatchScanner,
+    ScanItemStatus,
+)
 from .entry_price import EntryPrice, calc_entry_zone, reconcile_entry_zone
 from .exit_price import ExitPrice, calc_exit_prices
 from .opportunity_engine import OpportunityEngine
@@ -35,6 +41,8 @@ __all__ = [
     "DecisionState",
     "build_trading_plan",
     "OpportunityEngine",
+    "MIN_KLINE_BARS",
+    "ScanItemStatus",
     "BatchScanItem",
     "BatchScanResult",
     "OpportunityBatchScanner",
