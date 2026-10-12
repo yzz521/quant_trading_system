@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Callable, Optional
 
 import pandas as pd
@@ -37,6 +38,10 @@ from .quality_gate import QualityGateConfig
 from .trading_plan import DecisionState
 
 log = get_logger("OpportunityBatch")
+
+# 机会引擎要够长的日 K 才能算指标。不足（次新股、停牌、拉取为空）记为跳过，
+# 不记为失败。数值保持 60，只用于归类与日志，不改变打分或交易门槛。
+MIN_KLINE_BARS = 60
 
 # 默认数据加载器：code → 已加指标的日K DataFrame（失败返回 None）
 KlineLoader = Callable[[str, str], Optional[pd.DataFrame]]
@@ -152,6 +157,19 @@ def _engine_accepts_extra(engine) -> bool:
     return "extra" in params
 
 
+class ScanItemStatus(str, Enum):
+    """单票扫描结局。用状态区分，不靠错误文案。
+
+    * ``ok``：产出了计划（含 AVOID，过滤发生在 plans 层）。
+    * ``skipped``：预期内数据不够（K 线根数不足），不是故障。
+    * ``failed``：异常，或引擎无法给出计划。
+    """
+
+    OK = "ok"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 @dataclass
 class BatchScanItem:
     """单票批量扫描结果（含原始计划，便于审计）。"""
@@ -163,18 +181,35 @@ class BatchScanItem:
     composite_score: float = 0.0
     extra: dict = field(default_factory=dict)
     gate_tier: str = ""
+    status: str = ScanItemStatus.OK.value
+    bar_count: Optional[int] = None   # 仅 skipped（数据不足）时填写实际根数
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
 
 
+def _outcome_row(it: "BatchScanItem") -> dict:
+    """失败/跳过项的结构化记录（调度器按 status 分日志，不解析 error 文案）。"""
+    row = {
+        "code": it.code,
+        "name": it.name,
+        "error": it.error,
+        "status": it.status,
+    }
+    if it.status == ScanItemStatus.SKIPPED:
+        row["bar_count"] = 0 if it.bar_count is None else int(it.bar_count)
+        row["min_bars"] = MIN_KLINE_BARS
+    return row
+
+
 @dataclass
 class BatchScanResult:
-    """批量扫描结果：成功列表 + 失败列表。"""
+    """批量扫描结果：成功列表 + 跳过列表 + 失败列表。"""
 
     plans: list = field(default_factory=list)   # 过滤后的交易计划 dict（供邮件/看板）
     items: list = field(default_factory=list)   # 全部单项（含 AVOID）
-    failed: list = field(default_factory=list)  # 失败项（code + error）
+    failed: list = field(default_factory=list)  # 真正失败（code + name + error + status）
+    skipped: list = field(default_factory=list)  # 数据不足等预期内跳过（另含 bar_count）
     elapsed: float = 0.0
     fundamentals_available: bool = False        # 本轮是否取到了财务数据
     gate_note: str = ""                         # 闸门口径说明（未取到财务数据时非空）
@@ -184,6 +219,7 @@ class BatchScanResult:
             "plans": self.plans,
             "items": [i.to_dict() for i in self.items],
             "failed": self.failed,
+            "skipped": self.skipped,
             "elapsed": round(self.elapsed, 2),
             "fundamentals_available": self.fundamentals_available,
             "gate_note": self.gate_note,
@@ -345,7 +381,11 @@ class OpportunityBatchScanner:
                 except Exception as e:  # noqa: BLE001
                     code = futs[fut]
                     log.debug("批量分析 %s 异常: %s", code, e)
-                    items.append(BatchScanItem(code=code, name=name_map.get(code, code), error=str(e)))
+                    name = (name_map or {}).get(code, code)
+                    items.append(BatchScanItem(
+                        code=code, name=name, error=str(e),
+                        status=ScanItemStatus.FAILED.value,
+                    ))
 
         items.sort(key=self._sort_key_of)
 
@@ -362,7 +402,8 @@ class OpportunityBatchScanner:
                 continue
             plans.append(p)
 
-        failed = [{"code": it.code, "name": it.name, "error": it.error} for it in items if it.error]
+        skipped = [_outcome_row(it) for it in items if it.status == ScanItemStatus.SKIPPED]
+        failed = [_outcome_row(it) for it in items if it.status == ScanItemStatus.FAILED]
         # 标志位必须反映**本轮实际结果**，而不是「数据源配好了」——
         # 后者会让「一个字段都没取到」被读成「数据齐全」，闸门看着在把关、
         # 实则整批静默降级。
@@ -375,6 +416,7 @@ class OpportunityBatchScanner:
             plans=plans,
             items=items if self.include_avoid else [i for i in items if i.plan and i.plan.get("decision") != DecisionState.AVOID.value],
             failed=failed,
+            skipped=skipped,
             elapsed=time.time() - t0,
             fundamentals_available=fetched,
             gate_note=gate_note,
@@ -482,8 +524,12 @@ class OpportunityBatchScanner:
         code, name = cand["code"], cand["name"]
         try:
             df = self.loader(code, name)
-            if df is None or len(df) < 60:
-                return BatchScanItem(code=code, name=name, error="数据不足")
+            if df is None or len(df) < MIN_KLINE_BARS:
+                return BatchScanItem(
+                    code=code, name=name, error="数据不足",
+                    status=ScanItemStatus.SKIPPED.value,
+                    bar_count=0 if df is None else int(len(df)),
+                )
             extra = {k: cand[k] for k in _EXTRA_KEYS if k in cand and cand[k] is not None}
             if self.fetch_fundamentals:
                 for k, v in _fetch_fundamentals_threadsafe(code, market).items():
@@ -492,7 +538,10 @@ class OpportunityBatchScanner:
             res = self.engine.analyze(code, name, df, extra=extra) if pass_extra \
                 else self.engine.analyze(code, name, df)
             if res.plan is None:
-                return BatchScanItem(code=code, name=name, error="无法生成计划", extra=extra)
+                return BatchScanItem(
+                    code=code, name=name, error="无法生成计划", extra=extra,
+                    status=ScanItemStatus.FAILED.value,
+                )
             plan = res.plan.to_dict()
             gate_meta = (plan.get("meta") or {}).get("quality_gate") or {}
             return BatchScanItem(
@@ -502,4 +551,7 @@ class OpportunityBatchScanner:
                 gate_tier=str(gate_meta.get("tier") or ""),
             )
         except Exception as e:  # noqa: BLE001
-            return BatchScanItem(code=code, name=name, error=str(e)[:200])
+            return BatchScanItem(
+                code=code, name=name, error=str(e)[:200],
+                status=ScanItemStatus.FAILED.value,
+            )

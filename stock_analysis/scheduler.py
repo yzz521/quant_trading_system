@@ -22,7 +22,7 @@ from .app_config import enabled_markets, load_app_config
 from .holdings import Holdings
 from .holdings_action import analyze_holding_actions
 from .notifier import Notifier, build_market_message
-from .opportunity import OpportunityBatchScanner, OpportunityEngine
+from .opportunity import MIN_KLINE_BARS, OpportunityBatchScanner, OpportunityEngine
 
 try:
     from zoneinfo import ZoneInfo
@@ -31,6 +31,65 @@ except Exception:  # noqa: BLE001
     BEIJING = timezone(timedelta(hours=8))
 
 log = get_logger("Scheduler")
+
+
+def _stock_label(row: dict) -> str:
+    """代码 + 名称。名称缺失或与代码相同时只留代码。"""
+    code = str(row.get("code") or "").strip()
+    name = str(row.get("name") or "").strip()
+    if name and name != code:
+        return f"{code} {name}".strip()
+    return code or name
+
+
+def _format_skipped_stock(row: dict) -> str:
+    bars = row.get("bar_count")
+    try:
+        bars_txt = str(int(bars))
+    except (TypeError, ValueError):
+        bars_txt = "?"
+    min_bars = row.get("min_bars", MIN_KLINE_BARS)
+    try:
+        min_txt = str(int(min_bars))
+    except (TypeError, ValueError):
+        min_txt = str(MIN_KLINE_BARS)
+    return f"{_stock_label(row)} K线 {bars_txt} 根 < {min_txt}"
+
+
+def _format_failed_stock(row: dict) -> str:
+    err = str(row.get("error") or "").strip()
+    label = _stock_label(row)
+    if err:
+        return f"{label}: {err}"
+    return label
+
+
+def _log_opportunity_scan(market: str, result) -> None:
+    """数据不足记 INFO 跳过；异常与无法生成计划记 WARNING，并带上每只的原因。
+
+    归类看结果上的 ``skipped`` / ``failed`` 列表（由扫描器按 status 填），
+    不根据错误文案是否包含「数据不足」来判断。
+    """
+    skipped = list(getattr(result, "skipped", None) or [])
+    failed = list(getattr(result, "failed", None) or [])
+    if skipped:
+        reasons: list[str] = []
+        for row in skipped:
+            reason = str(row.get("error") or "数据不足")
+            if reason not in reasons:
+                reasons.append(reason)
+        reason = "、".join(reasons) if reasons else "数据不足"
+        detail = "; ".join(_format_skipped_stock(row) for row in skipped)
+        log.info(
+            "[%s] 机会扫描跳过 %d 只（%s）: %s",
+            market, len(skipped), reason, detail,
+        )
+    if failed:
+        detail = "; ".join(_format_failed_stock(row) for row in failed)
+        log.warning(
+            "[%s] 机会扫描 %d 只失败: %s",
+            market, len(failed), detail,
+        )
 
 
 class MarketScheduler:
@@ -272,8 +331,7 @@ class MarketScheduler:
                     trading_plans = bt_res.plans
                     if bt_res.gate_note:
                         log.warning("[%s] 质量闸门口径提示: %s", market, bt_res.gate_note)
-                    if bt_res.failed:
-                        log.warning("[%s] 机会扫描 %d 只失败: %s", market, len(bt_res.failed), [f["code"] for f in bt_res.failed])
+                    _log_opportunity_scan(market, bt_res)
                     log.info("[%s] 机会扫描完成: %d 个有效计划（%.1fs）", market, len(trading_plans), bt_res.elapsed)
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] V2 机会扫描跳过: %s", market, e)

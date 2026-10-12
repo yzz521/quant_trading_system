@@ -71,6 +71,7 @@ class _FakeScanResult:
         self.plans = plans
         self.gate_note = ""
         self.failed: list = []
+        self.skipped: list = []
         self.elapsed = 0.0
 
 

@@ -8,7 +8,11 @@ from __future__ import annotations
 import pandas as pd
 from quant_trading_system.stock_analysis.data_fetcher import detect_market
 from quant_trading_system.stock_analysis.opportunity import OpportunityBatchScanner
-from quant_trading_system.stock_analysis.opportunity.batch_scanner import _default_loader
+from quant_trading_system.stock_analysis.opportunity.batch_scanner import (
+    MIN_KLINE_BARS,
+    ScanItemStatus,
+    _default_loader,
+)
 from quant_trading_system.stock_analysis.opportunity.trading_plan import DecisionState, TradingPlan
 
 
@@ -202,17 +206,19 @@ class TestBatchScan:
         res = _scanner(engine).scan(["A", "B"])
         assert len(res.failed) == 1
         assert res.failed[0]["code"] == "B"
+        assert res.failed[0]["status"] == "failed"
         assert "引擎异常" in res.failed[0]["error"]
+        assert res.skipped == []
         assert [p["code"] for p in res.plans] == ["A"]
 
     def test_empty_candidates(self):
         res = _scanner(_FakeEngine({})).scan([])
-        assert res.plans == [] and res.items == [] and res.failed == []
+        assert res.plans == [] and res.items == [] and res.failed == [] and res.skipped == []
 
     def test_to_dict(self):
         res = _scanner(_FakeEngine({"A": DecisionState.BUY_NOW})).scan(["A"])
         d = res.to_dict()
-        assert set(d) == {"plans", "items", "failed", "elapsed",
+        assert set(d) == {"plans", "items", "failed", "skipped", "elapsed",
                           "fundamentals_available", "gate_note"}
         assert isinstance(d["elapsed"], float)
 
@@ -220,6 +226,130 @@ class TestBatchScan:
         engine = _FakeEngine({"A": DecisionState.BUY_NOW, "B": DecisionState.WATCH})
         res = _scanner(engine, min_opportunity_score=80.0).scan(["A", "B"])
         assert [p["code"] for p in res.plans] == ["A"]  # B 机会分 50 < 80 被过滤
+
+    def test_short_kline_is_skipped_with_bar_count(self):
+        """次新股 K 线不足：跳过，带代码、名称、原因和实际根数，不进失败列表。"""
+
+        def loader(code, name):
+            return pd.DataFrame({"close": [10.0] * 23})
+
+        scanner = OpportunityBatchScanner(
+            engine=_FakeEngine({}), loader=loader, workers=1, fetch_fundamentals=False,
+        )
+        res = scanner.scan([{"code": "688825", "name": "某某股份"}], market="CN")
+        assert res.failed == []
+        assert res.plans == []
+        assert len(res.skipped) == 1
+        row = res.skipped[0]
+        assert row["code"] == "688825"
+        assert row["name"] == "某某股份"
+        assert row["status"] == ScanItemStatus.SKIPPED.value
+        assert row["error"] == "数据不足"
+        assert row["bar_count"] == 23
+        assert row["min_bars"] == MIN_KLINE_BARS == 60
+        assert res.items[0].status == ScanItemStatus.SKIPPED.value
+        assert res.items[0].bar_count == 23
+
+    def test_missing_kline_skipped_as_zero_bars(self):
+        scanner = OpportunityBatchScanner(
+            engine=_FakeEngine({}),
+            loader=lambda code, name: None,
+            workers=1,
+            fetch_fundamentals=False,
+        )
+        res = scanner.scan([{"code": "688825", "name": "某某股份"}])
+        assert res.failed == []
+        assert res.skipped[0]["bar_count"] == 0
+        assert res.skipped[0]["status"] == "skipped"
+
+    def test_bar_threshold_stays_at_60(self):
+        """59 根仍跳过且不进引擎；60 根仍分析。门槛本身不变。"""
+        seen: list = []
+
+        class _Eng(_FakeEngine):
+            def analyze(self, code, name, df):
+                seen.append((code, len(df)))
+                return super().analyze(code, name, df)
+
+        def _run(n):
+            seen.clear()
+            scanner = OpportunityBatchScanner(
+                engine=_Eng({"X": DecisionState.WATCH}),
+                loader=lambda code, name: pd.DataFrame({"close": [10.0] * n}),
+                workers=1,
+                fetch_fundamentals=False,
+            )
+            return scanner.scan([{"code": "X", "name": "边界"}])
+
+        short = _run(59)
+        assert short.skipped and short.skipped[0]["bar_count"] == 59
+        assert short.failed == []
+        assert seen == []
+
+        ok = _run(60)
+        assert ok.skipped == [] and ok.failed == []
+        assert seen == [("X", 60)]
+        assert [p["code"] for p in ok.plans] == ["X"]
+
+    def test_exception_text_matching_skip_reason_stays_failed(self):
+        """异常文案恰好是「数据不足」时仍算失败，归类不靠字符串匹配。"""
+
+        def boom(code, name):
+            raise RuntimeError("数据不足")
+
+        scanner = OpportunityBatchScanner(
+            engine=_FakeEngine({}), loader=boom, workers=1, fetch_fundamentals=False,
+        )
+        res = scanner.scan([{"code": "600000", "name": "浦发银行"}])
+        assert res.skipped == []
+        assert len(res.failed) == 1
+        assert res.failed[0]["status"] == ScanItemStatus.FAILED.value
+        assert res.failed[0]["error"] == "数据不足"
+        assert res.failed[0]["name"] == "浦发银行"
+
+    def test_unplannable_is_failure_not_skip(self):
+        class _Empty:
+            def analyze(self, code, name, df):
+                return type("R", (), {"plan": None})()
+
+        scanner = OpportunityBatchScanner(
+            engine=_Empty(),
+            loader=lambda code, name: pd.DataFrame({"close": [10.0] * 80}),
+            workers=1,
+            fetch_fundamentals=False,
+        )
+        res = scanner.scan([{"code": "600000", "name": "浦发银行"}])
+        assert res.skipped == []
+        assert res.failed[0]["status"] == "failed"
+        assert res.failed[0]["error"] == "无法生成计划"
+
+    def test_mixed_skip_and_failure_lists(self):
+
+        def load(code, name):
+            if code == "688825":
+                return pd.DataFrame({"close": [1.0] * 23})
+            if code == "600000":
+                raise RuntimeError("行情接口超时")
+            return pd.DataFrame({"close": [10.0] * 100})
+
+        scanner = OpportunityBatchScanner(
+            engine=_FakeEngine({"000001": DecisionState.BUY_NOW}),
+            loader=load,
+            workers=1,
+            fetch_fundamentals=False,
+        )
+        res = scanner.scan([
+            {"code": "688825", "name": "某某股份"},
+            {"code": "600000", "name": "浦发银行"},
+            {"code": "000001", "name": "平安银行"},
+        ])
+        assert [p["code"] for p in res.plans] == ["000001"]
+        assert [s["code"] for s in res.skipped] == ["688825"]
+        assert res.skipped[0]["bar_count"] == 23
+        assert res.skipped[0]["status"] == "skipped"
+        assert [f["code"] for f in res.failed] == ["600000"]
+        assert "行情接口超时" in res.failed[0]["error"]
+        assert res.failed[0]["status"] == "failed"
 
     def test_include_avoid_false_drops_items(self):
         engine = _FakeEngine({"A": DecisionState.AVOID, "B": DecisionState.BUY_NOW})
