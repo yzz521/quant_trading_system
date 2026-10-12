@@ -264,8 +264,20 @@ class Holdings:
         self.reload()
 
     # ------------------------------------------------------------------ #
-    def compute_pnl(self, market: Optional[str] = None) -> tuple[list[dict], dict]:
-        """Compute live PnL. Returns (positions_with_pnl, summary).
+    def compute_pnl(
+        self,
+        market: Optional[str] = None,
+        *,
+        price_source: str = "live",
+        session_date: Optional[date] = None,
+    ) -> tuple[list[dict], dict]:
+        """Compute PnL. Returns (positions_with_pnl, summary).
+
+        ``price_source="live"`` (default, hourly report) prefers the realtime
+        quote and falls back to the latest daily close. ``price_source="close"``
+        (closing report) uses only the daily-bar close — the session date's bar
+        when it is already in the frame, otherwise the latest close — and does
+        not call the live quote.
 
         Each position gains: current_price, market_value, pnl, pnl_pct, hold_days.
         Network failures degrade gracefully — the position keeps last known data
@@ -280,9 +292,11 @@ class Holdings:
         results: list[dict] = []
         total_cost = total_value = 0.0
 
-        # 优先用腾讯实时价（盘中实时/收盘后收盘价）；失败项回退 K 线最新价
+        use_close = price_source == "close"
+        # 盘中：优先腾讯实时价，失败项回退 K 线最新价。
+        # 收盘报告：只用日 K 收盘，不用实时快照。
         codes = [p["code"] for p in positions]
-        realtime = fetch_live_prices(codes) if codes else {}
+        realtime = {} if use_close or not codes else fetch_live_prices(codes)
 
         for p in positions:
             code = p["code"]
@@ -299,12 +313,13 @@ class Holdings:
             }
             try:
                 info = detect_market(code)
-                price = realtime.get(code.upper())
-                if price is None:
-                    # 实时未取到 → 回退 K 线最新价（可能是昨收，标注口径）
-                    df = fetch_kline(info, days=10)
-                    if not df.empty:
-                        price = float(df["close"].iloc[-1])
+                if use_close:
+                    price = self._daily_close(info, session_date)
+                else:
+                    price = realtime.get(code.upper())
+                    if price is None:
+                        # 实时未取到 → 回退 K 线最新价（可能是昨收，标注口径）
+                        price = self._daily_close(info, None)
                 if price is not None and price > 0:
                     value = price * qty
                     pnl = value - cost
@@ -334,6 +349,33 @@ class Holdings:
             "count": len(results),
         }
         return results, summary
+
+    @staticmethod
+    def _daily_close(info, session_date: Optional[date]) -> Optional[float]:
+        """日 K 收盘价。``session_date`` 当天的 bar 优先，否则用最后一根。"""
+        df = fetch_kline(info, days=10)
+        if df is None or df.empty or "close" not in df.columns:
+            return None
+        chosen = df
+        if session_date is not None:
+            try:
+                idx = pd.to_datetime(df.index)
+                day = pd.Timestamp(session_date)
+                # 去掉时区再比日期，避免日 K 带 tz 时对不上
+                if getattr(idx, "tz", None) is not None:
+                    idx = idx.tz_convert(None)
+                mask = idx.normalize() == day
+                if bool(mask.any()):
+                    chosen = df.loc[mask]
+            except Exception as e:  # noqa: BLE001
+                log.debug("收盘价按日对齐失败，改用最后一根: %s", e)
+        try:
+            price = float(chosen["close"].iloc[-1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if price != price or price <= 0:  # NaN
+            return None
+        return price
 
     @staticmethod
     def _hold_days(buy_date: str) -> int:

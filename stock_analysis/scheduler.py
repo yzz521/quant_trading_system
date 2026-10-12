@@ -6,6 +6,9 @@
 * 资金账户快照
 * 今日机会（V2 批量交易计划，可选）
 
+另外，每个 A 股交易日北京时间 15:05 再发一封收盘报告：同一套邮件模板，
+价格改用日 K 收盘，标题标明「收盘」。周末与上交所休市日不发。
+
 The scheduler is a plain ``while`` loop on ``time.sleep`` — no extra deps — so
 it can run anywhere Python runs (a tmux session, a launchd/ systemd unit, a
 small cloud VM). A ``--test`` flag fires one cycle immediately for sanity.
@@ -13,11 +16,12 @@ small cloud VM). A ``--test`` flag fires one cycle immediately for sanity.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from ..utils import get_logger
+from ..utils.calendar import is_a_share_trading_day
 from .app_config import enabled_markets, load_app_config
 from .holdings import Holdings
 from .holdings_action import analyze_holding_actions
@@ -31,6 +35,13 @@ except Exception:  # noqa: BLE001
     BEIJING = timezone(timedelta(hours=8))
 
 log = get_logger("Scheduler")
+
+# A 股收盘报告。15:00 收盘，15:05 发。主循环按 poll_interval 醒来，上一轮
+# 分析也可能跨过 15:05，所以在 [15:05, 16:00) 内第一次醒来发一次，而不是
+# 只认 15:05 那一分钟。过了 16:00 不再补发，避免半夜启动补一封过时邮件。
+CN_CLOSE_HOUR = 15
+CN_CLOSE_MINUTE = 5
+CN_CLOSE_UNTIL_HOUR = 16
 
 
 def _stock_label(row: dict) -> str:
@@ -101,6 +112,8 @@ class MarketScheduler:
         self.holdings = Holdings(holdings_path)
         # 纸面结算比较贵（要拉未了结信号的行情），按「市场 + 当日」去重，每天只跑一次
         self._last_settle_date: Optional[tuple] = None
+        # 收盘报告每个交易日只发一次（北京时间的日期）
+        self._last_close_report_date: Optional[date] = None
         self.reload()
 
     def reload(self) -> None:
@@ -213,14 +226,30 @@ class MarketScheduler:
             return cached_items(market, today)
 
     # ------------------------------------------------------------------ #
-    def _run_market(self, market: str, *, force_holdings_quant: bool = False) -> Optional[dict]:
+    def _run_market(
+        self,
+        market: str,
+        *,
+        force_holdings_quant: bool = False,
+        closing: bool = False,
+        as_of: Optional[datetime] = None,
+    ) -> Optional[dict]:
         pool = self.stock_pools.get(market, []) or []
-        log.info("[%s] 开始每日决策分析（回退池 %d 只）...", market, len(pool))
+        if closing:
+            log.info("[%s] 开始收盘报告（回退池 %d 只）...", market, len(pool))
+        else:
+            log.info("[%s] 开始每日决策分析（回退池 %d 只）...", market, len(pool))
 
         # ---- 我的持仓盈亏 + 卖出/加仓参考 ----
         holdings, h_summary = [], None
         try:
-            holdings, h_summary = self.holdings.compute_pnl(market)
+            if closing:
+                day = self._as_beijing(as_of).date() if as_of is not None else self._now_beijing().date()
+                holdings, h_summary = self.holdings.compute_pnl(
+                    market, price_source="close", session_date=day,
+                )
+            else:
+                holdings, h_summary = self.holdings.compute_pnl(market)
         except Exception as e:  # noqa: BLE001
             log.warning("[%s] 持仓盈亏计算失败: %s", market, e)
 
@@ -393,6 +422,8 @@ class MarketScheduler:
             holding_actions=holding_actions,
             trading_plans=trading_plans,
             portfolio_risk=portfolio_risk,
+            closing=closing,
+            as_of=as_of,
         )
         log.info("[%s] 推送:\n%s", market, text[:200])
         self.notifier.send(title, text, html)
@@ -571,6 +602,53 @@ class MarketScheduler:
         )
 
     # ------------------------------------------------------------------ #
+    def _as_beijing(self, now: Optional[datetime] = None) -> datetime:
+        now = now or self._now_beijing()
+        if now.tzinfo is None:
+            return now.replace(tzinfo=BEIJING)
+        return now.astimezone(BEIJING)
+
+    def closing_report_due(self, now: Optional[datetime] = None) -> bool:
+        """A 股交易日、北京时间落在 15:05–16:00、且当天还没发过收盘报告。"""
+        now = self._as_beijing(now)
+        if "CN" not in self.enabled_markets:
+            return False
+        if self._last_close_report_date == now.date():
+            return False
+        if not is_a_share_trading_day(now.date()):
+            return False
+        minutes = now.hour * 60 + now.minute
+        start = CN_CLOSE_HOUR * 60 + CN_CLOSE_MINUTE
+        end = CN_CLOSE_UNTIL_HOUR * 60
+        return start <= minutes < end
+
+    def _run_closing_report(self, now: datetime) -> None:
+        """复用盘中那一轮分析，只把价格换成收盘价、标题改成收盘。"""
+        now = self._as_beijing(now)
+        info = self._run_market("CN", closing=True, as_of=now) or {}
+        self._record(
+            "CN", ok=True,
+            detail=(
+                f"收盘 holdings={info.get('holdings_n', 0)} "
+                f"actions={info.get('actions_n', 0)}"
+            ),
+            holdings_n=info.get("holdings_n", 0),
+            actions_n=info.get("actions_n", 0),
+        )
+
+    def _maybe_closing_report(self, now: datetime) -> None:
+        now = self._as_beijing(now)
+        if not self.closing_report_due(now):
+            return
+        try:
+            self._run_closing_report(now)
+        except Exception as e:  # noqa: BLE001
+            log.error("[CN] 收盘报告失败: %s", e)
+            self._record("CN", ok=False, detail=f"收盘报告失败: {e}")
+            return
+        self._last_close_report_date = now.date()
+
+    # ------------------------------------------------------------------ #
     def run_once(self, market: Optional[str] = None) -> None:
         """Fire one cycle for every open market (or a specific one)."""
         self.reload()
@@ -588,37 +666,44 @@ class MarketScheduler:
                 log.info("[%s] 非交易时段，跳过", m)
 
     # ------------------------------------------------------------------ #
+    def _tick(self, now: datetime, now_ts: float, last: dict) -> None:
+        """一轮轮询：先看要不要发收盘报告，再跑仍在交易时段内的小时报。"""
+        # 收盘检查放在小时报前面。15:05 A 股已收盘，不会和 CN 小时报叠在同一轮；
+        # 放前面是为了不被同一轮里港股/美股的长扫描拖过发送窗口。
+        self._maybe_closing_report(now)
+        intervals = {"CN": self.cn_interval, "HK": self.ushk_interval, "US": self.ushk_interval}
+        for m, interval in intervals.items():
+            if m not in self.enabled_markets:
+                continue
+            if self._in_session(m, now) and now_ts - last[m] >= interval:
+                try:
+                    info = self._run_market(m) or {}
+                    self._record(
+                        m, ok=True,
+                        detail=f"holdings={info.get('holdings_n', 0)} "
+                               f"actions={info.get('actions_n', 0)}",
+                        holdings_n=info.get("holdings_n", 0),
+                        actions_n=info.get("actions_n", 0),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.error("[%s] 执行失败: %s", m, e)
+                    self._record(m, ok=False, detail=f"执行失败: {e}")
+                last[m] = now_ts
+        status = {m: ("开" if self._in_session(m, now) else "休")
+                  for m in self.enabled_markets}
+        log.info("状态 %s", status)
+
     def run_forever(self) -> None:
         """Block forever, polling every ``poll_interval`` seconds."""
-        log.info("调度器启动 | A股每%ds / 美股港股每%ds",
-                 self.cn_interval, self.ushk_interval)
+        log.info("调度器启动 | A股每%ds / 美股港股每%ds | A股收盘报告 %02d:%02d",
+                 self.cn_interval, self.ushk_interval, CN_CLOSE_HOUR, CN_CLOSE_MINUTE)
         last = {"CN": 0.0, "HK": 0.0, "US": 0.0}
         try:
             while True:
                 self.reload()
                 now_ts = time.time()
                 now = self._now_beijing()
-                intervals = {"CN": self.cn_interval, "HK": self.ushk_interval, "US": self.ushk_interval}
-                for m, interval in intervals.items():
-                    if m not in self.enabled_markets:
-                        continue
-                    if self._in_session(m, now) and now_ts - last[m] >= interval:
-                        try:
-                            info = self._run_market(m) or {}
-                            self._record(
-                                m, ok=True,
-                                detail=f"holdings={info.get('holdings_n', 0)} "
-                                       f"actions={info.get('actions_n', 0)}",
-                                holdings_n=info.get("holdings_n", 0),
-                                actions_n=info.get("actions_n", 0),
-                            )
-                        except Exception as e:  # noqa: BLE001
-                            log.error("[%s] 执行失败: %s", m, e)
-                            self._record(m, ok=False, detail=f"执行失败: {e}")
-                        last[m] = now_ts
-                status = {m: ("开" if self._in_session(m, now) else "休")
-                          for m in self.enabled_markets}
-                log.info("状态 %s", status)
+                self._tick(now, now_ts, last)
                 time.sleep(self.poll_interval)
         except KeyboardInterrupt:
             log.info("调度器已停止")

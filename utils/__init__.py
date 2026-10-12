@@ -22,7 +22,7 @@ except Exception:  # noqa: BLE001
 if not _sys.stdout.isatty():
     _os.environ.setdefault("TQDM_DISABLE", "1")
 
-from .calendar import get_trading_days, is_trading_day, next_trading_day
+from .calendar import get_trading_days, is_a_share_trading_day, is_trading_day, next_trading_day
 from .helpers import deep_merge, ensure_dir, load_json, load_yaml, pct_change, safe_round, save_yaml
 from .logger import add_file_handler, get_logger, set_log_level
 
@@ -38,6 +38,7 @@ __all__ = [
     "safe_round",
     "pct_change",
     "is_trading_day",
+    "is_a_share_trading_day",
     "get_trading_days",
     "next_trading_day",
 ]

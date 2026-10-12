@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import smtplib
 import time
+from datetime import datetime
 from email.encoders import encode_base64
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -21,6 +22,7 @@ from typing import Optional
 import requests
 
 from ..utils import get_logger, load_yaml
+from ..utils.calendar import to_beijing
 
 log = get_logger("Notifier")
 
@@ -173,11 +175,24 @@ def build_market_message(
     holding_actions: Optional[list] = None,
     trading_plans: Optional[list] = None,
     portfolio_risk: Optional[dict] = None,
+    *,
+    closing: bool = False,
+    as_of: Optional[datetime] = None,
 ) -> tuple[str, str, str]:
-    """构建每日决策邮件（持仓 / 资金 / 组合风控 / 持仓量化 / 今日机会 / 卖出加仓参考）。"""
-    now = time.strftime("%Y-%m-%d %H:%M")
+    """构建每日决策邮件（持仓 / 资金 / 组合风控 / 持仓量化 / 今日机会 / 卖出加仓参考）。
+
+    ``closing=True`` 只改标题和页眉，正文区块与盘中小时报同一套模板。
+    标题形如 ``GP助手 · A股 收盘 2026-10-12``（北京时间的交易日）。
+    """
     mname = {"CN": "A股", "US": "美股", "HK": "港股"}[market]
-    title = f"GP助手 · {mname} {now}"
+    if closing:
+        stamp = to_beijing(as_of)
+        title = f"GP助手 · {mname} 收盘 {stamp.strftime('%Y-%m-%d')}"
+        subtitle = "GP助手 · 收盘报告"
+    else:
+        now = time.strftime("%Y-%m-%d %H:%M")
+        title = f"GP助手 · {mname} {now}"
+        subtitle = "GP助手 · 开盘期间定时推送"
 
     text_parts: list[str] = []
     html_parts: list[str] = []
@@ -270,14 +285,19 @@ def build_market_message(
         text_parts.append(DISCLAIMER)
 
     text_body = "\n".join(text_parts)
-    html_body = _html_wrap(title, mname, html_parts)
+    html_body = _html_wrap(title, mname, html_parts, subtitle=subtitle)
     return title, text_body, html_body
 
 
 # --------------------------------------------------------------------------- #
 # HTML helpers
 # --------------------------------------------------------------------------- #
-def _html_wrap(title: str, mname: str, sections: list[str]) -> str:
+def _html_wrap(
+    title: str,
+    mname: str,
+    sections: list[str],
+    subtitle: str = "GP助手 · 开盘期间定时推送",
+) -> str:
     bar_color = {"A股": "#c0392b", "美股": "#2c3e50", "港股": "#8e44ad"}.get(mname, "#1f77b4")
     return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><style>
 body{{font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;background:#f4f5f7;margin:0;padding:20px;}}
@@ -296,7 +316,7 @@ tr:hover td{{background:#fafbfc;}}
 .foot{{padding:12px 24px;background:#f7f8fa;font-size:11px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;}}
 </style></head><body>
 <div class="card">
-  <div class="bar"><h1>{title}</h1><div class="sub">GP助手 · 开盘期间定时推送</div></div>
+  <div class="bar"><h1>{title}</h1><div class="sub">{subtitle}</div></div>
   {''.join(sections)}
   <div class="foot">本邮件由量化系统自动发送，内容仅供参考，不构成投资建议 · 投资有风险，决策需谨慎</div>
 </div>
